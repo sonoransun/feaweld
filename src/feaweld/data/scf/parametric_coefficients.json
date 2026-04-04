@@ -1,0 +1,92 @@
+[
+  {
+    "geometry": "fillet_toe",
+    "a": 0.469,
+    "b": 0.572,
+    "c": 0.469,
+    "description": "Fillet weld toe (Anthes 1993)",
+    "reference": "Anthes et al. 1993",
+    "valid_ranges": {"toe_radius_mm": [0.05, 5.0], "toe_angle_deg": [15, 90], "thickness_mm": [5, 100]}
+  },
+  {
+    "geometry": "butt_toe",
+    "a": 0.350,
+    "b": 0.550,
+    "c": 0.400,
+    "description": "Butt weld toe",
+    "reference": "Radaj et al. 2006",
+    "valid_ranges": {"toe_radius_mm": [0.05, 5.0], "toe_angle_deg": [10, 60], "thickness_mm": [5, 100]}
+  },
+  {
+    "geometry": "cruciform",
+    "a": 0.520,
+    "b": 0.550,
+    "c": 0.480,
+    "description": "Cruciform joint toe",
+    "reference": "Brennan et al. 2000",
+    "valid_ranges": {"toe_radius_mm": [0.05, 4.0], "toe_angle_deg": [20, 80], "thickness_mm": [6, 80]}
+  },
+  {
+    "geometry": "t_joint",
+    "a": 0.480,
+    "b": 0.560,
+    "c": 0.460,
+    "description": "T-joint fillet toe",
+    "reference": "Hobbacher 2009",
+    "valid_ranges": {"toe_radius_mm": [0.05, 4.0], "toe_angle_deg": [20, 80], "thickness_mm": [6, 80]}
+  },
+  {
+    "geometry": "lap_joint",
+    "a": 0.440,
+    "b": 0.540,
+    "c": 0.450,
+    "description": "Lap joint fillet toe",
+    "reference": "Hobbacher 2009",
+    "valid_ranges": {"toe_radius_mm": [0.05, 3.0], "toe_angle_deg": [20, 75], "thickness_mm": [3, 50]}
+  },
+  {
+    "geometry": "corner",
+    "a": 0.500,
+    "b": 0.580,
+    "c": 0.470,
+    "description": "Corner joint",
+    "reference": "Fricke 2003",
+    "valid_ranges": {"toe_radius_mm": [0.05, 4.0], "toe_angle_deg": [20, 90], "thickness_mm": [5, 80]}
+  },
+  {
+    "geometry": "cover_plate",
+    "a": 0.510,
+    "b": 0.560,
+    "c": 0.490,
+    "description": "Cover plate end",
+    "reference": "Maddox 1991",
+    "valid_ranges": {"toe_radius_mm": [0.05, 3.0], "toe_angle_deg": [15, 60], "thickness_mm": [5, 60]}
+  },
+  {
+    "geometry": "longitudinal_attachment",
+    "a": 0.430,
+    "b": 0.530,
+    "c": 0.440,
+    "description": "Longitudinal non-load-carrying attachment",
+    "reference": "IIW XIII-2151-07",
+    "valid_ranges": {"toe_radius_mm": [0.05, 4.0], "toe_angle_deg": [15, 70], "thickness_mm": [5, 80]}
+  },
+  {
+    "geometry": "transverse_attachment",
+    "a": 0.490,
+    "b": 0.570,
+    "c": 0.480,
+    "description": "Transverse non-load-carrying attachment",
+    "reference": "IIW XIII-2151-07",
+    "valid_ranges": {"toe_radius_mm": [0.05, 4.0], "toe_angle_deg": [20, 80], "thickness_mm": [5, 80]}
+  },
+  {
+    "geometry": "gusset",
+    "a": 0.460,
+    "b": 0.550,
+    "c": 0.460,
+    "description": "Gusset plate connection",
+    "reference": "Maddox 1991",
+    "valid_ranges": {"toe_radius_mm": [0.05, 4.0], "toe_angle_deg": [15, 75], "thickness_mm": [6, 80]}
+  }
+]

@@ -1,0 +1,66 @@
+name: Aluminum 5086-H34
+category: aluminum
+density: 2660  # kg/m^3
+
+# Temperature-dependent properties: [temperature_C, value]
+elastic_modulus:
+  - [20, 71000]
+  - [100, 68000]
+  - [200, 61000]
+  - [300, 51000]
+  - [400, 39000]
+
+poisson_ratio:
+  - [20, 0.33]
+  - [200, 0.34]
+  - [400, 0.36]
+
+yield_strength:
+  - [20, 255]
+  - [100, 242]
+  - [150, 223]
+  - [200, 178]
+  - [250, 102]
+  - [300, 51]
+  - [350, 26]
+  - [400, 13]
+
+ultimate_strength:
+  - [20, 325]
+  - [100, 309]
+  - [150, 283]
+  - [200, 226]
+  - [250, 131]
+  - [300, 65]
+  - [350, 36]
+  - [400, 21]
+
+thermal_conductivity:
+  - [20, 125]
+  - [100, 131]
+  - [200, 139]
+  - [300, 146]
+  - [400, 151]
+
+specific_heat:
+  - [20, 900]
+  - [100, 946]
+  - [200, 992]
+  - [300, 1038]
+  - [400, 1084]
+
+thermal_expansion:
+  - [20, 23.7e-6]
+  - [100, 24.4e-6]
+  - [200, 25.3e-6]
+  - [300, 26.2e-6]
+  - [400, 27.1e-6]
+
+# Creep: Norton-Bailey
+creep_A: 1.2e-12
+creep_n: 3.9
+creep_m: 0.0
+
+# Isotropic hardening
+hardening_modulus: 750
+hardening_exponent: 0.46

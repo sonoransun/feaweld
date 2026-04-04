@@ -1,0 +1,66 @@
+name: Aluminum 6061-T6
+category: aluminum
+density: 2700  # kg/m^3
+
+# Temperature-dependent properties: [temperature_C, value]
+elastic_modulus:
+  - [20, 69000]
+  - [100, 66000]
+  - [200, 59000]
+  - [300, 50000]
+  - [400, 38000]
+
+poisson_ratio:
+  - [20, 0.33]
+  - [200, 0.34]
+  - [400, 0.36]
+
+yield_strength:
+  - [20, 276]
+  - [100, 262]
+  - [150, 241]
+  - [200, 193]
+  - [250, 110]
+  - [300, 55]
+  - [350, 28]
+  - [400, 14]
+
+ultimate_strength:
+  - [20, 310]
+  - [100, 295]
+  - [150, 270]
+  - [200, 215]
+  - [250, 125]
+  - [300, 62]
+  - [350, 35]
+  - [400, 20]
+
+thermal_conductivity:
+  - [20, 167]
+  - [100, 175]
+  - [200, 184]
+  - [300, 192]
+  - [400, 198]
+
+specific_heat:
+  - [20, 896]
+  - [100, 942]
+  - [200, 988]
+  - [300, 1034]
+  - [400, 1080]
+
+thermal_expansion:
+  - [20, 23.6e-6]
+  - [100, 24.3e-6]
+  - [200, 25.2e-6]
+  - [300, 26.1e-6]
+  - [400, 27.0e-6]
+
+# Creep: Norton-Bailey (aluminum creeps at lower temperatures)
+creep_A: 1.0e-12
+creep_n: 4.0
+creep_m: 0.0
+
+# Isotropic hardening
+hardening_modulus: 800
+hardening_exponent: 0.45

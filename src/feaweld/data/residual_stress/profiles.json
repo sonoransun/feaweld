@@ -1,0 +1,154 @@
+[
+  {
+    "name": "BS7910_Level1",
+    "standard": "BS7910",
+    "weld_type": "all",
+    "z_over_t": [0.0, 0.5, 1.0],
+    "stress_over_sy": [1.0, 1.0, 1.0],
+    "notes": "Uniform yield magnitude through thickness (conservative)"
+  },
+  {
+    "name": "BS7910_Level2_butt",
+    "standard": "BS7910",
+    "weld_type": "butt",
+    "z_over_t": [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
+    "stress_over_sy": [1.0, 0.85, 0.55, 0.20, -0.10, -0.20, -0.15, 0.00, 0.15, 0.35, 0.60],
+    "notes": "Polynomial through-thickness distribution for butt welds"
+  },
+  {
+    "name": "BS7910_Level2_fillet",
+    "standard": "BS7910",
+    "weld_type": "fillet",
+    "z_over_t": [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
+    "stress_over_sy": [1.0, 0.90, 0.65, 0.30, 0.00, -0.15, -0.15, -0.05, 0.10, 0.30, 0.55],
+    "notes": "Polynomial through-thickness distribution for fillet welds"
+  },
+  {
+    "name": "BS7910_Level2_repair",
+    "standard": "BS7910",
+    "weld_type": "repair",
+    "z_over_t": [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
+    "stress_over_sy": [1.0, 1.0, 0.85, 0.55, 0.20, -0.05, -0.15, -0.10, 0.05, 0.25, 0.50],
+    "notes": "Through-thickness distribution for repair welds (more conservative)"
+  },
+  {
+    "name": "API579_Level1",
+    "standard": "API579",
+    "weld_type": "all",
+    "z_over_t": [0.0, 0.5, 1.0],
+    "stress_over_sy": [1.0, 1.0, 1.0],
+    "notes": "Uniform yield magnitude through thickness per API 579-1/ASME FFS-1"
+  },
+  {
+    "name": "API579_Level2_butt",
+    "standard": "API579",
+    "weld_type": "butt",
+    "z_over_t": [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
+    "stress_over_sy": [1.0, 0.80, 0.50, 0.15, -0.15, -0.25, -0.20, -0.05, 0.15, 0.40, 0.65],
+    "notes": "Through-thickness for butt welds per API 579 Annex E"
+  },
+  {
+    "name": "API579_Level2_fillet",
+    "standard": "API579",
+    "weld_type": "fillet",
+    "z_over_t": [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
+    "stress_over_sy": [1.0, 0.88, 0.60, 0.28, -0.02, -0.18, -0.18, -0.08, 0.08, 0.30, 0.58],
+    "notes": "Through-thickness for fillet welds per API 579 Annex E"
+  },
+  {
+    "name": "API579_Level2_pipe_circ",
+    "standard": "API579",
+    "weld_type": "pipe_circumferential",
+    "z_over_t": [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
+    "stress_over_sy": [1.0, 0.82, 0.52, 0.18, -0.12, -0.22, -0.18, -0.02, 0.18, 0.42, 0.68],
+    "notes": "Circumferential pipe girth welds per API 579"
+  },
+  {
+    "name": "API579_Level2_pipe_axial",
+    "standard": "API579",
+    "weld_type": "pipe_axial",
+    "z_over_t": [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
+    "stress_over_sy": [1.0, 0.78, 0.48, 0.12, -0.18, -0.28, -0.22, -0.08, 0.12, 0.38, 0.62],
+    "notes": "Axial seam welds in pipe per API 579"
+  },
+  {
+    "name": "R6_upper_bound",
+    "standard": "R6",
+    "weld_type": "all",
+    "z_over_t": [0.0, 0.5, 1.0],
+    "stress_over_sy": [1.0, 1.0, 1.0],
+    "notes": "R6 upper bound: uniform yield magnitude (same as Level 1)"
+  },
+  {
+    "name": "R6_butt_ferritic",
+    "standard": "R6",
+    "weld_type": "butt",
+    "z_over_t": [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
+    "stress_over_sy": [1.0, 0.82, 0.50, 0.15, -0.12, -0.22, -0.18, -0.02, 0.18, 0.42, 0.65],
+    "notes": "R6 through-thickness profile for ferritic steel butt welds"
+  },
+  {
+    "name": "R6_butt_austenitic",
+    "standard": "R6",
+    "weld_type": "butt",
+    "z_over_t": [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
+    "stress_over_sy": [1.0, 0.90, 0.65, 0.30, 0.00, -0.15, -0.12, 0.05, 0.25, 0.48, 0.70],
+    "notes": "R6 through-thickness profile for austenitic stainless steel butt welds"
+  },
+  {
+    "name": "FITNET_Level1",
+    "standard": "FITNET",
+    "weld_type": "all",
+    "z_over_t": [0.0, 0.5, 1.0],
+    "stress_over_sy": [1.0, 1.0, 1.0],
+    "notes": "FITNET upper bound: uniform yield magnitude"
+  },
+  {
+    "name": "FITNET_Level2_butt",
+    "standard": "FITNET",
+    "weld_type": "butt",
+    "z_over_t": [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
+    "stress_over_sy": [1.0, 0.83, 0.52, 0.17, -0.13, -0.23, -0.18, -0.03, 0.16, 0.40, 0.63],
+    "notes": "FITNET through-thickness profile for butt welds"
+  },
+  {
+    "name": "FITNET_Level2_fillet",
+    "standard": "FITNET",
+    "weld_type": "fillet",
+    "z_over_t": [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
+    "stress_over_sy": [1.0, 0.88, 0.62, 0.30, 0.00, -0.16, -0.15, -0.04, 0.12, 0.32, 0.56],
+    "notes": "FITNET through-thickness profile for fillet welds"
+  },
+  {
+    "name": "DNV_butt",
+    "standard": "DNV-RP-C203",
+    "weld_type": "butt",
+    "z_over_t": [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
+    "stress_over_sy": [1.0, 0.80, 0.48, 0.12, -0.16, -0.25, -0.20, -0.05, 0.15, 0.40, 0.65],
+    "notes": "DNV recommended through-thickness profile for butt welds in marine"
+  },
+  {
+    "name": "DNV_fillet",
+    "standard": "DNV-RP-C203",
+    "weld_type": "fillet",
+    "z_over_t": [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
+    "stress_over_sy": [1.0, 0.85, 0.58, 0.25, -0.05, -0.18, -0.16, -0.05, 0.10, 0.32, 0.58],
+    "notes": "DNV recommended through-thickness profile for fillet welds in marine"
+  },
+  {
+    "name": "PWHT_butt",
+    "standard": "general",
+    "weld_type": "butt",
+    "z_over_t": [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
+    "stress_over_sy": [0.30, 0.25, 0.18, 0.08, -0.02, -0.08, -0.06, 0.00, 0.06, 0.12, 0.20],
+    "notes": "Post-weld heat treated butt weld, residual stress significantly reduced"
+  },
+  {
+    "name": "PWHT_fillet",
+    "standard": "general",
+    "weld_type": "fillet",
+    "z_over_t": [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
+    "stress_over_sy": [0.30, 0.28, 0.20, 0.10, 0.00, -0.06, -0.06, -0.02, 0.04, 0.12, 0.20],
+    "notes": "Post-weld heat treated fillet weld, residual stress significantly reduced"
+  }
+]

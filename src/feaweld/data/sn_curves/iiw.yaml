@@ -1,0 +1,65 @@
+# IIW FAT classes for welded joints
+# N = C / S^m (two-slope curves)
+# Knee point at N = 1e7 (m1=3), then m2=5 for endurance
+
+classes:
+  FAT36:
+    fat: 36
+    m1: 3
+    m2: 5
+  FAT40:
+    fat: 40
+    m1: 3
+    m2: 5
+  FAT45:
+    fat: 45
+    m1: 3
+    m2: 5
+  FAT50:
+    fat: 50
+    m1: 3
+    m2: 5
+  FAT56:
+    fat: 56
+    m1: 3
+    m2: 5
+  FAT63:
+    fat: 63
+    m1: 3
+    m2: 5
+  FAT71:
+    fat: 71
+    m1: 3
+    m2: 5
+  FAT80:
+    fat: 80
+    m1: 3
+    m2: 5
+  FAT90:
+    fat: 90
+    m1: 3
+    m2: 5
+  FAT100:
+    fat: 100
+    m1: 3
+    m2: 5
+  FAT112:
+    fat: 112
+    m1: 3
+    m2: 5
+  FAT125:
+    fat: 125
+    m1: 3
+    m2: 5
+  FAT140:
+    fat: 140
+    m1: 3
+    m2: 5
+  FAT160:
+    fat: 160
+    m1: 3
+    m2: 5
+
+# Reference life for FAT: N = 2e6 at stress_range = FAT
+# C1 = FAT^m1 * 2e6
+# Knee point stress = FAT * (2e6 / 1e7)^(1/3)
