@@ -69,6 +69,10 @@ class WeldingHeatInput:
     f_f: float = 0.6   # front fraction
     f_r: float = 1.4   # rear fraction (f_f + f_r = 2.0)
 
+    def __post_init__(self) -> None:
+        if self.travel_speed <= 0:
+            raise ValueError("travel_speed must be positive")
+
     @property
     def power(self) -> float:
         """Net heat input power (W)."""
@@ -87,6 +91,12 @@ class PWHTSchedule:
     holding_temperature: float   # C
     holding_time: float          # hours
     cooling_rate: float          # C/hour
+
+    def __post_init__(self) -> None:
+        if self.heating_rate <= 0:
+            raise ValueError("heating_rate must be positive")
+        if self.cooling_rate <= 0:
+            raise ValueError("cooling_rate must be positive")
 
     def temperature_profile(self, dt: float = 60.0) -> tuple[NDArray, NDArray]:
         """Generate time (s) vs temperature (C) arrays for the PWHT cycle.

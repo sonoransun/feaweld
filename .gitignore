@@ -161,6 +161,9 @@ models/
 *.glb
 *.gltf
 
+# EXCEPTION: Documentation images (committed, generated via scripts/generate_docs_images.py)
+!docs/images/*.svg
+
 # Compressed archives
 *.zip
 *.tar

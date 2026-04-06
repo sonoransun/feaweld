@@ -166,13 +166,21 @@ def plot_stress_field(
             f"Choose from: {list(_COMPONENT_MAP)}"
         )
 
+    from feaweld.visualization.theme import get_cmap, configure_plotter
+
     plotter = pv.Plotter(off_screen=not show)
+    configure_plotter(plotter)
+    # Show mesh edges for smaller meshes to aid mesh quality assessment
+    show_edges = grid.n_cells < 50_000
     plotter.add_mesh(
         grid,
         scalars=scalar_key,
-        cmap=kwargs.pop("cmap", "jet"),
+        cmap=kwargs.pop("cmap", get_cmap("stress")),
         show_scalar_bar=True,
         scalar_bar_args={"title": component.replace("_", " ").title()},
+        show_edges=show_edges,
+        edge_color="gray",
+        edge_opacity=0.15 if show_edges else 0.0,
         **kwargs,
     )
     plotter.add_axes()
@@ -230,14 +238,17 @@ def plot_deformed(
         element_type=mesh.element_type,
     )
 
+    from feaweld.visualization.theme import get_cmap, configure_plotter
+
     plotter = pv.Plotter(off_screen=not show)
+    configure_plotter(plotter)
 
     if stress is not None:
         grid = stress_field_to_pyvista(deformed_mesh, stress)
         plotter.add_mesh(
             grid,
             scalars="von_mises",
-            cmap="jet",
+            cmap=get_cmap("stress"),
             show_scalar_bar=True,
             scalar_bar_args={"title": "Von Mises (MPa)"},
         )
@@ -286,11 +297,14 @@ def plot_temperature_field(
     grid = _mesh_to_pyvista_grid(mesh)
     grid.point_data["Temperature"] = np.asarray(temperature, dtype=np.float64)
 
+    from feaweld.visualization.theme import get_cmap, configure_plotter
+
     plotter = pv.Plotter(off_screen=not show)
+    configure_plotter(plotter)
     plotter.add_mesh(
         grid,
         scalars="Temperature",
-        cmap="coolwarm",
+        cmap=get_cmap("temperature"),
         show_scalar_bar=True,
         scalar_bar_args={"title": "Temperature (\u00b0C)"},
     )

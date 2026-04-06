@@ -25,6 +25,11 @@ def _require_matplotlib():
         ) from exc
 
 
+def _apply_theme():
+    from feaweld.visualization.theme import apply_feaweld_style
+    apply_feaweld_style()
+
+
 def engineering_dashboard(
     workflow_result: Any,
     show: bool = True,
@@ -47,6 +52,7 @@ def engineering_dashboard(
         matplotlib.figure.Figure
     """
     plt = _require_matplotlib()
+    _apply_theme()
     fig, axes = plt.subplots(2, 3, figsize=(18, 11))
     fig.suptitle(
         f"Engineering Assessment: {workflow_result.case.name}",
@@ -104,6 +110,7 @@ def fatigue_dashboard(
         matplotlib.figure.Figure
     """
     plt = _require_matplotlib()
+    _apply_theme()
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
     fig.suptitle(
         f"Fatigue Assessment: {workflow_result.case.name}",
@@ -172,10 +179,12 @@ def comparison_view(
         # For triangle meshes, use tricontourf
         if mesh.elements.shape[1] >= 3:
             tri = Triangulation(x, y, mesh.elements[:, :3])
-            tc = ax.tricontourf(tri, vals, levels=20, cmap="jet")
+            from feaweld.visualization.theme import get_cmap
+            tc = ax.tricontourf(tri, vals, levels=20, cmap=get_cmap("stress"))
             fig.colorbar(tc, ax=ax, label=f"{component} (MPa)")
         else:
-            sc = ax.scatter(x, y, c=vals, cmap="jet", s=5)
+            from feaweld.visualization.theme import get_cmap
+            sc = ax.scatter(x, y, c=vals, cmap=get_cmap("stress"), s=5)
             fig.colorbar(sc, ax=ax, label=f"{component} (MPa)")
 
         ax.set_title(label, fontsize=12, fontweight="bold")
@@ -289,7 +298,8 @@ def _panel_linearization(ax: Any, wf: Any) -> None:
             mesh = wf.fea_results.mesh
             vm = wf.fea_results.stress.von_mises
             y_coords = mesh.nodes[:, 1]
-            ax.scatter(vm, y_coords, c=vm, cmap="jet", s=3, alpha=0.5)
+            from feaweld.visualization.theme import get_cmap
+            ax.scatter(vm, y_coords, c=vm, cmap=get_cmap("stress"), s=3, alpha=0.5)
             ax.set_xlabel("von Mises Stress (MPa)")
             ax.set_ylabel("y position (mm)")
             ax.set_title("Stress vs. Position")

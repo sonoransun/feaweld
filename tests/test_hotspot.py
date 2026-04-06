@@ -107,3 +107,19 @@ def test_hotspot_no_stress_raises():
 
     with pytest.raises(ValueError, match="No stress data"):
         hotspot_stress_linear(results, weld_line)
+
+
+def test_hotspot_parallel_vectors_raises():
+    """Normal parallel to weld tangent should raise ValueError."""
+    mesh, results = _make_stress_gradient_mesh()
+
+    # Normal along x-axis — same direction as weld line (all nodes along x)
+    weld_line = WeldLineDefinition(
+        name="test",
+        node_ids=np.array([0, 1]),
+        plate_thickness=10.0,
+        normal_direction=np.array([1.0, 0.0, 0.0]),  # parallel to weld!
+    )
+
+    with pytest.raises(ValueError, match="parallel"):
+        hotspot_stress_linear(results, weld_line)

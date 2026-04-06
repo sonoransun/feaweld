@@ -200,6 +200,31 @@ class TestPlots2D:
 # Tests: Annotations
 # ---------------------------------------------------------------------------
 
+class TestTheme:
+    def test_get_cmap_returns_strings(self):
+        from feaweld.visualization.theme import get_cmap, _CMAP_REGISTRY
+        for purpose in _CMAP_REGISTRY:
+            result = get_cmap(purpose)
+            assert isinstance(result, str)
+            assert len(result) > 0
+
+    def test_get_cmap_unknown_raises(self):
+        from feaweld.visualization.theme import get_cmap
+        with pytest.raises(KeyError):
+            get_cmap("nonexistent_purpose")
+
+    def test_apply_feaweld_style(self):
+        from feaweld.visualization.theme import apply_feaweld_style
+        apply_feaweld_style()  # should not raise
+
+    def test_color_constants_are_hex(self):
+        from feaweld.visualization import theme
+        for name in ("FEAWELD_BLUE", "FEAWELD_RED", "FEAWELD_ORANGE",
+                     "FEAWELD_GREEN", "FEAWELD_DARK", "FEAWELD_GRAY"):
+            val = getattr(theme, name)
+            assert val.startswith("#") and len(val) == 7
+
+
 class TestAnnotations:
     def test_find_critical_points(self):
         from feaweld.visualization.annotations import find_critical_points

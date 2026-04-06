@@ -170,9 +170,9 @@ def j2_return_mapping(
 
     # Normal to yield surface: n_hat = s_trial / ||s_trial||
     if s_norm < 1e-30:
-        n_hat = np.zeros(6)
-    else:
-        n_hat = s_trial / s_norm
+        # Deviatoric stress is zero — elastic return (defensive guard)
+        return sigma_trial.copy(), strain_plastic_n.copy(), 0.0
+    n_hat = s_trial / s_norm
 
     # Update stress: subtract plastic corrector from trial stress
     # sigma = sigma_trial - 2*mu*Delta_gamma * sqrt(3/2) * n_hat

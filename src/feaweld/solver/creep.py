@@ -178,6 +178,14 @@ def simulate_pwht(
                 if d_stress_mag > 0.5 * old_vm:
                     d_stress *= 0.5 * old_vm / d_stress_mag
             stress_current[pt] -= d_stress
+            if not np.all(np.isfinite(stress_current[pt])):
+                import warnings
+                warnings.warn(
+                    f"Non-finite stress at point {pt} during PWHT at time "
+                    f"{t:.1f}s. Values clamped to 0. Consider smaller time steps.",
+                    RuntimeWarning,
+                    stacklevel=1,
+                )
             stress_current[pt] = np.where(
                 np.isfinite(stress_current[pt]), stress_current[pt], 0.0
             )

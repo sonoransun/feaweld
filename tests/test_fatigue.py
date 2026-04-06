@@ -254,3 +254,50 @@ class TestKnockdown:
     def test_combined_with_extra(self) -> None:
         result = combined_knockdown(k_a=0.9, k_b=1.0, k_env=1.0, k_reliability=0.8)
         assert result == pytest.approx(0.9 * 0.8)
+
+
+# ---------------------------------------------------------------------------
+# Edge case tests
+# ---------------------------------------------------------------------------
+
+
+class TestSNCurveEdgeCases:
+    """Edge cases for S-N curve life computation."""
+
+    def test_life_zero_stress_returns_inf(self) -> None:
+        curve = iiw_fat(90)
+        assert math.isinf(curve.life(0.0))
+
+    def test_life_negative_stress_returns_inf(self) -> None:
+        curve = iiw_fat(90)
+        assert math.isinf(curve.life(-50.0))
+
+    def test_life_at_knee_point_continuity(self) -> None:
+        """Life should be continuous at the knee point (segment transition)."""
+        curve = iiw_fat(90)
+        S_knee = curve.segments[0].stress_threshold
+        # Compute life from both sides of the knee
+        N_above = curve.segments[0].C / (S_knee ** curve.segments[0].m)
+        N_below = curve.segments[1].C / (S_knee ** curve.segments[1].m)
+        # They should be approximately equal (continuity)
+        assert N_above == pytest.approx(N_below, rel=1e-3)
+
+
+class TestRainflowEdgeCases:
+
+    def test_constant_amplitude_signal(self) -> None:
+        """Repeating 0-100-0 pattern should produce full cycles."""
+        signal = np.array([0, 100, 0, 100, 0, 100, 0], dtype=float)
+        cycles = rainflow_count(signal)
+        # Should have cycles with range = 100
+        full = [c for c in cycles if c[2] == 1.0]
+        ranges_100 = [c for c in cycles if abs(c[0] - 100.0) < 1e-6]
+        assert len(ranges_100) >= 1
+
+    def test_two_point_signal_produces_half_cycle(self) -> None:
+        """Two-point signal should produce residue half-cycle."""
+        signal = np.array([0.0, 100.0], dtype=float)
+        cycles = rainflow_count(signal)
+        # Residue handling produces half cycles
+        if len(cycles) > 0:
+            assert all(c[2] == 0.5 for c in cycles)

@@ -124,6 +124,16 @@ class FEMesh:
     node_sets: dict[str, NDArray[np.int64]] = field(default_factory=dict)
     element_sets: dict[str, NDArray[np.int64]] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        if self.nodes.ndim != 2 or self.nodes.shape[1] not in (2, 3):
+            raise ValueError(
+                f"FEMesh.nodes must have shape (n, 2) or (n, 3), got {self.nodes.shape}"
+            )
+        if self.elements.ndim != 2:
+            raise ValueError(
+                f"FEMesh.elements must be 2D, got shape {self.elements.shape}"
+            )
+
     @property
     def n_nodes(self) -> int:
         return self.nodes.shape[0]
@@ -146,6 +156,12 @@ class StressField:
     """Stress tensor components at nodes or integration points."""
     values: NDArray[np.float64]  # (n_points, 6) for 3D: [σ_xx, σ_yy, σ_zz, τ_xy, τ_yz, τ_xz]
     location: str = "nodes"     # "nodes" or "gauss_points"
+
+    def __post_init__(self) -> None:
+        if self.values.ndim != 2 or self.values.shape[1] != 6:
+            raise ValueError(
+                f"StressField.values must have shape (n, 6), got {self.values.shape}"
+            )
 
     @property
     def von_mises(self) -> NDArray[np.float64]:
@@ -227,6 +243,8 @@ class SNCurve:
 
     def life(self, stress_range: float) -> float:
         """Compute fatigue life N for a given stress range S."""
+        if stress_range <= 0:
+            return float("inf")
         for seg in self.segments:
             if stress_range >= seg.stress_threshold:
                 return seg.C / (stress_range ** seg.m)

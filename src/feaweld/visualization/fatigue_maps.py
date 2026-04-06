@@ -62,15 +62,25 @@ def plot_fatigue_life(
 
     grid.point_data["fatigue_life"] = scalar_data
 
+    from feaweld.visualization.theme import get_cmap, configure_plotter
+
     plotter = pv.Plotter(off_screen=not show)
+    configure_plotter(plotter)
     plotter.add_mesh(
         grid,
         scalars="fatigue_life",
-        cmap="RdYlBu",  # red (low) → blue (high)
+        cmap=get_cmap("fatigue_life"),
         show_scalar_bar=True,
         scalar_bar_args={"title": title},
     )
     plotter.add_axes()
+
+    # Color interpretation annotation
+    plotter.add_text(
+        "Red = short life (critical)    Blue = long life (safe)",
+        position="lower_left", font_size=8, color="black",
+    )
+
     if show:
         plotter.show()
     return plotter
@@ -109,16 +119,28 @@ def plot_damage(
     grid = _mesh_to_grid(mesh)
     grid.point_data["damage"] = np.asarray(damage_field, dtype=np.float64)
 
+    from feaweld.visualization.theme import get_cmap, configure_plotter
+
     plotter = pv.Plotter(off_screen=not show)
+    configure_plotter(plotter)
     plotter.add_mesh(
         grid,
         scalars="damage",
-        cmap="hot",
+        cmap=get_cmap("damage"),
         clim=[0.0, max(float(np.max(damage_field)), 1.0)],
         show_scalar_bar=True,
         scalar_bar_args={"title": "Miner Damage D"},
     )
     plotter.add_axes()
+
+    # Failure warning if any node exceeds D=1.0
+    max_damage = float(np.max(damage_field))
+    if max_damage >= 1.0:
+        plotter.add_text(
+            f"D \u2265 1.0 \u2014 FAILURE (max D = {max_damage:.2f})",
+            position="upper_left", font_size=10, color="red",
+        )
+
     if show:
         plotter.show()
     return plotter

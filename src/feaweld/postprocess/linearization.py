@@ -87,14 +87,14 @@ def linearize_through_thickness(
     # σ_m,ij = (1/t) ∫₀ᵗ σ_ij(z) dz
     membrane = np.zeros(6)
     for comp in range(6):
-        membrane[comp] = np.trapz(total_stress[:, comp], z_coords) / thickness
+        membrane[comp] = np.trapezoid(total_stress[:, comp], z_coords) / thickness
 
     # Bending: linear moment component
     # σ_b,ij = (6/t²) ∫₀ᵗ σ_ij(z)·(z - t/2) dz
     z_centered = z_coords - thickness / 2.0
     bending = np.zeros(6)
     for comp in range(6):
-        bending[comp] = 6.0 * np.trapz(
+        bending[comp] = 6.0 * np.trapezoid(
             total_stress[:, comp] * z_centered, z_coords
         ) / (thickness ** 2)
 

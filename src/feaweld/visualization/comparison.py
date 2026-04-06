@@ -27,6 +27,8 @@ def _require_matplotlib():
 
 def _prepare_axes(ax, show, figsize=(8, 5)):
     """Get or create axes, return (fig, ax, should_show)."""
+    from feaweld.visualization.theme import apply_feaweld_style
+    apply_feaweld_style()
     plt = _require_matplotlib()
     if ax is None:
         fig, ax = plt.subplots(figsize=figsize)

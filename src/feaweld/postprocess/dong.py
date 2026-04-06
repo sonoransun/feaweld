@@ -212,11 +212,11 @@ def _structural_stress_from_linearization(
             stresses[j] = stress.von_mises[nearest]
 
         # Membrane: average
-        sigma_m = np.trapz(stresses, z_coords) / t
+        sigma_m = np.trapezoid(stresses, z_coords) / t
 
         # Bending: linear moment
         z_centered = z_coords - t / 2.0
-        sigma_b = 6.0 * np.trapz(stresses * z_centered, z_coords) / (t ** 2)
+        sigma_b = 6.0 * np.trapezoid(stresses * z_centered, z_coords) / (t ** 2)
 
         membrane[i] = sigma_m
         bending[i] = sigma_b
@@ -233,6 +233,7 @@ def _bending_ratio_function(r: NDArray[np.float64]) -> NDArray[np.float64]:
     # Polynomial fit for the I(r) function
     # From Dong's formulation: I(r) accounts for through-thickness
     # stress distribution effect on crack growth
+    r = np.clip(r, 0.0, 1.0)
     return 1.0 / (0.5 + 0.5 * np.sqrt(1.0 - r))
 
 

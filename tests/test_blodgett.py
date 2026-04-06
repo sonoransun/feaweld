@@ -145,3 +145,23 @@ class TestCapacity:
         asd = asd_capacity(throat, A_w)
         # LRFD/ASD ratio = 0.75/0.5 = 1.5
         assert lrfd / asd == pytest.approx(1.5)
+
+
+class TestWeldGroupEdgeCases:
+    """Edge cases for weld group property calculations."""
+
+    def test_l_shape_centroid(self) -> None:
+        """Verify L-shape centroid against hand calculation."""
+        props = weld_group_properties(WeldGroupShape.L_SHAPE, d=100.0, b=60.0)
+        # x_bar = b^2 / (2*(b+d)) = 3600 / 320 = 11.25
+        # y_bar = d^2 / (2*(b+d)) = 10000 / 320 = 31.25
+        assert props.x_bar == pytest.approx(60**2 / (2 * 160), rel=1e-4)
+        assert props.y_bar == pytest.approx(100**2 / (2 * 160), rel=1e-4)
+
+    def test_u_shape_centroid(self) -> None:
+        """Verify U-shape centroid against hand calculation."""
+        props = weld_group_properties(WeldGroupShape.U_SHAPE, d=100.0, b=60.0)
+        # x_bar = b/2 = 30.0
+        # y_bar = d^2 / (b + 2d) = 10000 / 260
+        assert props.x_bar == pytest.approx(30.0, rel=1e-4)
+        assert props.y_bar == pytest.approx(100**2 / (60 + 200), rel=1e-4)

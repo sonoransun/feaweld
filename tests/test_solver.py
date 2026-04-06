@@ -700,3 +700,43 @@ class TestComputeThermalStress:
         assert np.all(stress[:, 0] < 0)
         assert np.all(stress[:, 1] < 0)
         assert np.all(stress[:, 2] < 0)
+
+
+# ---------------------------------------------------------------------------
+# Edge case tests
+# ---------------------------------------------------------------------------
+
+
+class TestEdgeCases:
+
+    def test_j2_zero_strain_elastic(self):
+        """Zero strain increment should return zero stress and no plasticity."""
+        from feaweld.solver.mechanical import j2_return_mapping
+
+        mat = _make_material()
+        sigma, eps_p, dgamma = j2_return_mapping(
+            np.zeros(6), np.zeros(6), mat, 20.0,
+        )
+        np.testing.assert_allclose(sigma, 0.0, atol=1e-12)
+        np.testing.assert_allclose(eps_p, 0.0, atol=1e-12)
+        assert dgamma == pytest.approx(0.0)
+
+    def test_single_point_material_interpolation(self):
+        """Material with a single temperature data point should return constant."""
+        from feaweld.core.materials import Material
+
+        mat = Material(
+            name="test_single",
+            density=7850.0,
+            elastic_modulus={20.0: 200000.0},
+            poisson_ratio={20.0: 0.3},
+            yield_strength={20.0: 250.0},
+            ultimate_strength={20.0: 400.0},
+            thermal_conductivity={20.0: 50.0},
+            specific_heat={20.0: 500.0},
+            thermal_expansion={20.0: 12e-6},
+        )
+        # Should return same value at any temperature
+        assert mat.E(20.0) == pytest.approx(200000.0)
+        assert mat.E(500.0) == pytest.approx(200000.0)
+        assert mat.nu(100.0) == pytest.approx(0.3)

@@ -17,6 +17,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from feaweld.core.types import FEMesh, StressField
+from feaweld.visualization.theme import get_cmap, configure_plotter
 
 
 # Map user-friendly component names to point-data keys (mirrors stress_plots).
@@ -100,6 +101,7 @@ def plot_stress_with_clipping(
     )
 
     plotter = pv.Plotter(off_screen=not show)
+    configure_plotter(plotter)
 
     # Full mesh as translucent wireframe for spatial context.
     plotter.add_mesh(
@@ -114,7 +116,7 @@ def plot_stress_with_clipping(
     plotter.add_mesh(
         clipped,
         scalars=scalar_key,
-        cmap=kwargs.pop("cmap", "jet"),
+        cmap=kwargs.pop("cmap", get_cmap("stress")),
         show_scalar_bar=True,
         scalar_bar_args={"title": component.replace("_", " ").title()},
         **kwargs,
@@ -179,12 +181,13 @@ def plot_stress_threshold(
     )
 
     plotter = pv.Plotter(off_screen=not show)
+    configure_plotter(plotter)
 
     # Full mesh as translucent background.
     plotter.add_mesh(
         grid,
         scalars=scalar_key,
-        cmap=kwargs.pop("cmap", "jet"),
+        cmap=kwargs.pop("cmap", get_cmap("stress")),
         opacity=0.15,
         show_scalar_bar=False,
     )
@@ -193,7 +196,7 @@ def plot_stress_threshold(
     plotter.add_mesh(
         thresholded,
         scalars=scalar_key,
-        cmap=kwargs.pop("threshold_cmap", "jet"),
+        cmap=kwargs.pop("threshold_cmap", get_cmap("stress")),
         show_scalar_bar=True,
         scalar_bar_args={
             "title": f"{component.replace('_', ' ').title()} "
@@ -251,6 +254,7 @@ def plot_iso_surface(
     grid.set_active_scalars(scalar_key)
 
     plotter = pv.Plotter(off_screen=not show)
+    configure_plotter(plotter)
 
     # Original mesh as translucent wireframe.
     plotter.add_mesh(
@@ -338,6 +342,7 @@ def plot_force_vectors(
     cloud["vectors"] = active_vectors
 
     plotter = pv.Plotter(off_screen=not show)
+    configure_plotter(plotter)
 
     # Add mesh as translucent surface for context.
     grid = _mesh_to_pyvista_grid(mesh)
@@ -425,6 +430,7 @@ def plot_weld_region_highlight(
         weld_elem_ids = mesh.element_sets[weld_region]
 
     plotter = pv.Plotter(off_screen=not show)
+    configure_plotter(plotter)
 
     # Base mesh translucent.
     plotter.add_mesh(
@@ -442,7 +448,7 @@ def plot_weld_region_highlight(
             plotter.add_mesh(
                 weld_grid,
                 scalars="von_mises",
-                cmap=kwargs.pop("cmap", "jet"),
+                cmap=kwargs.pop("cmap", get_cmap("stress")),
                 show_scalar_bar=True,
                 scalar_bar_args={"title": "Von Mises (MPa) - Weld"},
                 **kwargs,
@@ -537,6 +543,7 @@ def plot_sed_control_volume(
         has_sed_field = True
 
     plotter = pv.Plotter(off_screen=not show)
+    configure_plotter(plotter)
 
     # Full mesh translucent.
     plotter.add_mesh(
@@ -646,6 +653,7 @@ def plot_mesh_preview(
     grid = _mesh_to_pyvista_grid(mesh)
 
     plotter = pv.Plotter(off_screen=not show)
+    configure_plotter(plotter)
 
     # Base mesh: light gray with edges.
     plotter.add_mesh(
@@ -754,11 +762,12 @@ def plot_annotated_stress(
     grid = stress_field_to_pyvista(mesh, stress)
 
     plotter = pv.Plotter(off_screen=not show)
+    configure_plotter(plotter)
 
     plotter.add_mesh(
         grid,
         scalars=scalar_key,
-        cmap=kwargs.pop("cmap", "jet"),
+        cmap=kwargs.pop("cmap", get_cmap("stress")),
         show_scalar_bar=True,
         scalar_bar_args={"title": component.replace("_", " ").title()},
         **kwargs,

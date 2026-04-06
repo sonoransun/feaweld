@@ -70,7 +70,13 @@ def hotspot_stress_linear(
         # Direction: away from weld, along plate surface (perpendicular to normal and weld line)
         weld_tangent = _estimate_weld_tangent(mesh, weld_line, node_id)
         surface_dir = np.cross(normal, weld_tangent)
-        surface_dir = surface_dir / (np.linalg.norm(surface_dir) + 1e-12)
+        _sd_norm = np.linalg.norm(surface_dir)
+        if _sd_norm < 1e-10:
+            raise ValueError(
+                f"Plate normal is parallel to weld tangent at node {node_id} — "
+                "cannot determine surface direction for hot-spot extrapolation."
+            )
+        surface_dir = surface_dir / _sd_norm
 
         ref_stresses = []
         for d in ref_distances:
@@ -124,7 +130,13 @@ def hotspot_stress_quadratic(
 
         weld_tangent = _estimate_weld_tangent(mesh, weld_line, node_id)
         surface_dir = np.cross(normal, weld_tangent)
-        surface_dir = surface_dir / (np.linalg.norm(surface_dir) + 1e-12)
+        _sd_norm = np.linalg.norm(surface_dir)
+        if _sd_norm < 1e-10:
+            raise ValueError(
+                f"Plate normal is parallel to weld tangent at node {node_id} — "
+                "cannot determine surface direction for hot-spot extrapolation."
+            )
+        surface_dir = surface_dir / _sd_norm
 
         ref_stresses = []
         for d in ref_distances:

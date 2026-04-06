@@ -50,6 +50,8 @@ def _von_mises_from_voigt(s: NDArray[np.float64]) -> NDArray[np.float64]:
 
 def _prepare_axes(plt, ax: Any, title: str | None):
     """Return ``(fig, ax)``; create a new figure when *ax* is ``None``."""
+    from feaweld.visualization.theme import apply_feaweld_style
+    apply_feaweld_style()
     if ax is None:
         fig, ax = plt.subplots()
     else:
@@ -127,6 +129,24 @@ def plot_through_thickness(
         label="Peak (nonlinear)",
     )
 
+    # --- Engineering context ---
+    # Reference lines at membrane and membrane+bending scalars
+    ax.axvline(result.membrane_scalar, color="blue", linestyle=":", alpha=0.4, linewidth=0.8)
+    ax.axvline(result.membrane_plus_bending_scalar, color="red", linestyle=":", alpha=0.4, linewidth=0.8)
+
+    # Decomposition equation box
+    ax.text(
+        0.98, 0.02,
+        "$\\sigma_{total} = \\sigma_m + \\sigma_b + \\sigma_F$",
+        transform=ax.transAxes, fontsize=8,
+        ha="right", va="bottom",
+        bbox=dict(boxstyle="round,pad=0.3", facecolor="#eaf2f8", alpha=0.9, edgecolor="#bdc3c7"),
+    )
+
+    # Surface labels
+    ax.text(ax.get_xlim()[0], z[0], " Inner", fontsize=7, va="top", color="#555")
+    ax.text(ax.get_xlim()[0], z[-1], " Outer", fontsize=7, va="bottom", color="#555")
+
     ax.set_xlabel("Stress (MPa)")
     ax.set_ylabel("Through-thickness position (mm)")
     ax.legend(loc="best", fontsize="small")
@@ -173,6 +193,19 @@ def plot_hotspot_extrapolation(
     ref_s = np.asarray(result.reference_stresses, dtype=np.float64)
     hs = result.hot_spot_stress
 
+    # --- Schematic weld toe profile at x=0 ---
+    stress_range = float(np.max(ref_s) - np.min(ref_s))
+    y_base = float(np.min(ref_s)) - stress_range * 0.05
+    weld_h = stress_range * 0.15
+    weld_w = float(np.max(ref_d)) * 0.06
+    ax.fill(
+        [-weld_w, 0, 0, -weld_w],
+        [y_base, y_base, y_base + weld_h, y_base],
+        color="#bdc3c7", edgecolor="#7f8c8d", linewidth=1.0, zorder=1,
+    )
+    ax.text(-weld_w * 0.5, y_base + weld_h * 0.5, "weld\ntoe",
+            fontsize=6, ha="center", va="center", color="#555")
+
     # Reference point markers
     ax.plot(ref_d, ref_s, "bo", markersize=8, label="Reference points")
 
@@ -193,12 +226,25 @@ def plot_hotspot_extrapolation(
     ax.annotate(
         f"{hs:.1f} MPa",
         xy=(0, hs),
-        xytext=(float(np.max(ref_d)) * 0.15, hs + (np.max(ref_s) - np.min(ref_s)) * 0.12),
+        xytext=(float(np.max(ref_d)) * 0.15, hs + stress_range * 0.12),
         arrowprops=dict(arrowstyle="->", color="red", lw=1.2),
         fontsize=9,
         color="red",
         fontweight="bold",
     )
+
+    # --- Horizontal reference line at hot-spot stress ---
+    ax.axhline(hs, color="red", linestyle=":", alpha=0.3, linewidth=0.8)
+
+    # --- IIW reference point distance labels ---
+    extrap_type = getattr(result, "extrapolation_type", None)
+    type_label = getattr(extrap_type, "value", "") if extrap_type else ""
+    if type_label:
+        ax.text(
+            0.98, 0.98, f"IIW {type_label}",
+            transform=ax.transAxes, fontsize=8, ha="right", va="top",
+            bbox=dict(boxstyle="round,pad=0.3", facecolor="#eaf2f8", alpha=0.9, edgecolor="#bdc3c7"),
+        )
 
     ax.set_xlabel("Distance from weld toe (mm)")
     ax.set_ylabel("Stress (MPa)")
@@ -248,15 +294,17 @@ def plot_dong_decomposition(
     abs_mem = np.abs(result.membrane_stress)
     abs_bend = np.abs(result.bending_stress)
 
+    from feaweld.visualization.theme import FEAWELD_BLUE, FEAWELD_ORANGE
+
     # Stacked bars
     bar_width = 0.7
     ax.bar(
         node_idx, abs_mem, width=bar_width,
-        color="steelblue", label="Membrane |$\\sigma_m$|",
+        color=FEAWELD_BLUE, label="Membrane |$\\sigma_m$|",
     )
     ax.bar(
         node_idx, abs_bend, width=bar_width, bottom=abs_mem,
-        color="orange", label="Bending |$\\sigma_b$|",
+        color=FEAWELD_ORANGE, label="Bending |$\\sigma_b$|",
     )
 
     ax.set_xlabel("Node")
@@ -276,6 +324,16 @@ def plot_dong_decomposition(
     lines_1, labels_1 = ax.get_legend_handles_labels()
     lines_2, labels_2 = ax2.get_legend_handles_labels()
     ax.legend(lines_1 + lines_2, labels_1 + labels_2, loc="upper right", fontsize="small")
+
+    # --- Formula box ---
+    ax.text(
+        0.02, 0.98,
+        "$\\sigma_s = \\sigma_m + \\sigma_b$\n"
+        "$r = |\\sigma_b| / (|\\sigma_m| + |\\sigma_b|)$",
+        transform=ax.transAxes, fontsize=7,
+        ha="left", va="top",
+        bbox=dict(boxstyle="round,pad=0.3", facecolor="#eaf2f8", alpha=0.9, edgecolor="#bdc3c7"),
+    )
 
     ax.set_xticks(node_idx)
     ax.grid(True, axis="y", linestyle=":", alpha=0.5)
@@ -356,9 +414,21 @@ def plot_sn_curve(
             knee_points_s.append(seg.stress_threshold)
             knee_points_n.append(n_knee)
 
+    # --- Fatigue regime bands ---
+    ax.axvspan(1e0, 1e4, alpha=0.04, color="red", zorder=0)
+    ax.axvspan(1e4, 2e6, alpha=0.04, color="orange", zorder=0)
+    ax.axvspan(2e6, 1e10, alpha=0.04, color="green", zorder=0)
+    ax.text(3e1, s_min * 1.15, "LCF", fontsize=7, color="#888", ha="center")
+    ax.text(1e5, s_min * 1.15, "HCF", fontsize=7, color="#888", ha="center")
+    ax.text(1e8, s_min * 1.15, "Endurance", fontsize=7, color="#888", ha="center")
+
     # Draw knee point markers
     for n_k, s_k in zip(knee_points_n, knee_points_s):
         ax.plot(n_k, s_k, "D", color="darkgreen", markersize=8, zorder=5)
+        # Vertical CAFL line at knee point
+        ax.axvline(n_k, color="darkgreen", linestyle="--", alpha=0.3, linewidth=0.7)
+        ax.text(n_k, s_max * 0.85, "CAFL", fontsize=7, color="darkgreen",
+                ha="center", rotation=90, alpha=0.6)
     if knee_points_n:
         ax.plot([], [], "D", color="darkgreen", markersize=8, label="Knee point")
 
@@ -377,9 +447,16 @@ def plot_sn_curve(
                 color="red",
             )
 
+    # --- Standard name annotation ---
+    ax.text(
+        0.98, 0.98, curve.name,
+        transform=ax.transAxes, fontsize=9, ha="right", va="top",
+        bbox=dict(boxstyle="round,pad=0.3", facecolor="#eaf2f8", alpha=0.9, edgecolor="#bdc3c7"),
+    )
+
     ax.set_xlabel("Fatigue Life $N$ (cycles)")
     ax.set_ylabel("Stress Range $S$ (MPa)")
-    ax.legend(loc="best", fontsize="small")
+    ax.legend(loc="lower left", fontsize="small")
     ax.grid(True, which="both", linestyle=":", alpha=0.4)
     fig.tight_layout()
 
@@ -426,7 +503,19 @@ def plot_stress_along_path(
     plt = _require_matplotlib()
     fig, ax = _prepare_axes(plt, ax, title)
 
-    ax.plot(distances, stress_values, "b-", linewidth=1.5, label="Stress")
+    from feaweld.visualization.theme import FEAWELD_BLUE
+
+    ax.plot(distances, stress_values, color=FEAWELD_BLUE, linewidth=1.5, label="Stress")
+
+    # --- Min / mean / max reference lines ---
+    s_min, s_mean, s_max = float(np.min(stress_values)), float(np.mean(stress_values)), float(np.max(stress_values))
+    ax.axhline(s_max, color="#e74c3c", linestyle="--", alpha=0.5, linewidth=0.8)
+    ax.axhline(s_mean, color="#f39c12", linestyle=":", alpha=0.5, linewidth=0.8)
+    ax.axhline(s_min, color="#27ae60", linestyle="--", alpha=0.5, linewidth=0.8)
+    x_right = float(np.max(distances))
+    ax.text(x_right, s_max, f" max {s_max:.0f}", fontsize=7, va="bottom", color="#e74c3c")
+    ax.text(x_right, s_mean, f" mean {s_mean:.0f}", fontsize=7, va="bottom", color="#f39c12")
+    ax.text(x_right, s_min, f" min {s_min:.0f}", fontsize=7, va="top", color="#27ae60")
 
     if labels:
         for name, dist_val in labels.items():
@@ -436,7 +525,7 @@ def plot_stress_along_path(
             ax.annotate(
                 f"{name}\n{stress_at:.1f} MPa",
                 xy=(dist_val, stress_at),
-                xytext=(dist_val, stress_at + 0.08 * (np.max(stress_values) - np.min(stress_values))),
+                xytext=(dist_val, stress_at + 0.08 * (s_max - s_min)),
                 fontsize=8,
                 ha="center",
                 arrowprops=dict(arrowstyle="->", color="gray", lw=0.8),
@@ -591,8 +680,9 @@ def plot_weld_group_geometry(
     else:
         raise ValueError(f"Unsupported weld group shape: {shape}")
 
-    # Mark centroid
+    # Mark centroid with coordinates
     ax.plot(cx, cy, "r+", markersize=12, markeredgewidth=2.5, zorder=5, label="Centroid")
+    ax.text(cx, cy, f"  ({cx:.1f}, {cy:.1f})", fontsize=7, color="red", va="top")
 
     # Properties text box
     if props is not None:
@@ -691,30 +781,46 @@ def plot_asme_check(
         max(3.0 * S_m, 2.0 * S_y),
     ]
 
+    import matplotlib.colors as mcolors
+
     y_pos = np.arange(len(categories))
-    bar_colors = ["green" if v < lim else "red" for v, lim in zip(values, limits)]
+    limit_eqs = [
+        f"$\\leq$ 1.0 $S_m$ = {limits[0]:.0f}",
+        f"$\\leq$ 1.5 $S_m$ = {limits[1]:.0f}",
+        f"$\\leq$ max(3$S_m$, 2$S_y$) = {limits[2]:.0f}",
+    ]
 
-    ax.barh(y_pos, values, color=bar_colors, height=0.5, alpha=0.8, edgecolor="black")
+    # Gradient colors based on utilization ratio (green->yellow->red)
+    utilization_cmap = plt.cm.RdYlGn_r  # red=high, green=low
+    bar_colors = []
+    for v, lim in zip(values, limits):
+        ratio = min(v / lim, 1.5) if lim > 0 else 1.5
+        bar_colors.append(utilization_cmap(ratio / 1.5))
 
-    # Draw vertical dashed limit lines and annotate ratios
+    ax.barh(y_pos, values, color=bar_colors, height=0.5, alpha=0.85, edgecolor="black")
+
+    # Draw vertical dashed limit lines and annotate ratios + limit equations
     for i, (val, lim) in enumerate(zip(values, limits)):
         ax.axvline(lim, color="gray", linestyle="--", linewidth=0.8, alpha=0.7)
         ratio = val / lim if lim > 0 else float("inf")
+        status = "PASS" if val < lim else "FAIL"
+        status_color = "darkgreen" if val < lim else "darkred"
         ax.text(
             val + max(values) * 0.02, i,
-            f"{ratio:.2f}",
+            f"{ratio:.0%}  {status}",
             va="center", fontsize=9, fontweight="bold",
-            color="darkred" if val >= lim else "darkgreen",
+            color=status_color,
         )
-        # Label the limit value at the top of the plot area
-        if i == 0:
-            ax.text(lim, len(categories) - 0.3, f"Limit = {lim:.0f}",
-                    ha="center", fontsize=7, color="gray")
+        # Limit equation to the right of the limit line
+        ax.text(
+            lim, i + 0.30, limit_eqs[i],
+            va="bottom", fontsize=7, color="gray", ha="center",
+        )
 
     ax.set_yticks(y_pos)
     ax.set_yticklabels(categories)
     ax.set_xlabel("Stress (MPa)")
-    ax.set_xlim(0, max(max(values), max(limits)) * 1.25)
+    ax.set_xlim(0, max(max(values), max(limits)) * 1.35)
     ax.grid(True, axis="x", linestyle=":", alpha=0.4)
     fig.tight_layout()
 
@@ -811,7 +917,12 @@ def plot_cross_section_stress(
     # Create Delaunay triangulation and plot filled contour
     triang = Triangulation(x, z)
     n_levels = 20
-    contour = ax.tricontourf(triang, values, levels=n_levels, cmap="jet")
+    from feaweld.visualization.theme import get_cmap
+    contour = ax.tricontourf(triang, values, levels=n_levels, cmap=get_cmap("stress"))
+    # Overlay contour lines with labels at key stress levels
+    n_line_levels = min(8, n_levels)
+    cs = ax.tricontour(triang, values, levels=n_line_levels, colors="black", linewidths=0.4, alpha=0.5)
+    ax.clabel(cs, inline=True, fontsize=6, fmt="%.0f")
     fig.colorbar(contour, ax=ax, label=f"{component.replace('_', ' ').title()} (MPa)")
 
     ax.set_xlabel("x (mm)")

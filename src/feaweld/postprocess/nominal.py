@@ -61,12 +61,12 @@ def categorize_stress_section(
 
     # Membrane: average through thickness
     # σ_m = (1/t) ∫₀ᵗ σ dz
-    sigma_m = float(np.trapz(stress_through_thickness, z_coords) / t)
+    sigma_m = float(np.trapezoid(stress_through_thickness, z_coords) / t)
 
     # Bending: linear component
     # σ_b = (6/t²) ∫₀ᵗ σ·(z - t/2) dz
     z_centered = z_coords - t / 2.0
-    sigma_b_integral = np.trapz(stress_through_thickness * z_centered, z_coords)
+    sigma_b_integral = np.trapezoid(stress_through_thickness * z_centered, z_coords)
     sigma_b = float(6.0 * sigma_b_integral / (t ** 2))
 
     # Peak: remainder

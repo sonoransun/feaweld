@@ -136,3 +136,29 @@ def test_dong_no_data_raises():
 
     with pytest.raises(ValueError):
         dong_structural_stress(results, weld_line)
+
+
+def test_dong_zero_forces(plate_with_nodal_forces):
+    """Zero nodal forces should produce zero membrane and bending."""
+    results, mesh = plate_with_nodal_forces
+    # Zero out all forces
+    results.nodal_forces[:] = 0.0
+
+    weld_line = WeldLineDefinition(
+        name="bottom_toe",
+        node_ids=np.array([0, 1, 2]),
+        plate_thickness=10.0,
+        normal_direction=np.array([0.0, 1.0, 0.0]),
+    )
+
+    dong = dong_structural_stress(results, weld_line)
+    assert np.allclose(dong.membrane_stress, 0.0, atol=1e-10)
+    assert np.allclose(dong.bending_stress, 0.0, atol=1e-10)
+
+
+def test_bending_ratio_clamped_no_nan():
+    """Bending ratio function should not produce NaN even near r=1."""
+    from feaweld.postprocess.dong import _bending_ratio_function
+    r = np.array([0.0, 0.5, 0.99, 1.0, 1.01])
+    result = _bending_ratio_function(r)
+    assert np.all(np.isfinite(result))

@@ -47,11 +47,20 @@ class Material:
     def __post_init__(self) -> None:
         self._interpolators: dict[str, interp1d] = {}
 
-    def _get_interpolator(self, prop_name: str) -> interp1d:
+    def _get_interpolator(self, prop_name: str):
         if prop_name not in self._interpolators:
             data: dict[float, float] = getattr(self, prop_name)
             temps = np.array(sorted(data.keys()))
             vals = np.array([data[t] for t in temps])
+            if len(temps) == 0:
+                raise ValueError(
+                    f"Material '{self.name}' property '{prop_name}' has no data points"
+                )
+            if len(temps) == 1:
+                # Single data point: return constant function
+                val = float(vals[0])
+                self._interpolators[prop_name] = lambda T, _v=val: _v
+                return self._interpolators[prop_name]
             kind = "cubic" if len(temps) >= 4 else "linear"
             self._interpolators[prop_name] = interp1d(
                 temps, vals, kind=kind, fill_value="extrapolate"
@@ -90,6 +99,11 @@ class Material:
         """First Lame parameter at temperature T."""
         E_val = self.E(T)
         nu_val = self.nu(T)
+        if nu_val >= 0.5:
+            raise ValueError(
+                f"Poisson ratio {nu_val:.4f} at T={T} C is >= 0.5 "
+                "(incompressible); Lame lambda is undefined."
+            )
         return E_val * nu_val / ((1 + nu_val) * (1 - 2 * nu_val))
 
     def lame_mu(self, T: float) -> float:
@@ -101,6 +115,11 @@ class Material:
         E_val = self.E(T)
         nu_val = self.nu(T)
         if plane == "stress":
+            if abs(nu_val) >= 1.0:
+                raise ValueError(
+                    f"|Poisson ratio| = {abs(nu_val):.4f} >= 1.0 at T={T} C; "
+                    "plane-stress elasticity tensor is undefined."
+                )
             factor = E_val / (1 - nu_val**2)
             return factor * np.array([
                 [1, nu_val, 0],
@@ -108,6 +127,11 @@ class Material:
                 [0, 0, (1 - nu_val) / 2],
             ])
         else:  # plane strain
+            if nu_val >= 0.5:
+                raise ValueError(
+                    f"Poisson ratio {nu_val:.4f} at T={T} C is >= 0.5; "
+                    "plane-strain elasticity tensor is undefined."
+                )
             factor = E_val / ((1 + nu_val) * (1 - 2 * nu_val))
             return factor * np.array([
                 [1 - nu_val, nu_val, 0],
