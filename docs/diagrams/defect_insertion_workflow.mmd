@@ -1,0 +1,25 @@
+flowchart TD
+    C[DefectConfig.enabled] --> S{explicit_defects empty?}
+    S -- yes --> DRAW[sample_iso5817_population<br/>level B / C / D]
+    S -- no --> LIST[Use explicit defect list]
+    DRAW --> VAL[defects.population.validate_population]
+    VAL --> BAD{violations?}
+    BAD -- yes --> REDRAW[Redraw up to 10 attempts]
+    REDRAW --> VAL
+    BAD -- no --> LIST
+    LIST --> JOINT[Base joint build in Gmsh OCC]
+    JOINT --> INSERT[defects.insertion.insert_all]
+    INSERT --> PORE[insert_pore: boolean cut sphere]
+    INSERT --> SLAG[insert_slag_inclusion: dilate + fragment]
+    INSERT --> UND[insert_undercut: sweep + cut]
+    INSERT --> LOF[insert_lack_of_fusion: planar fragment]
+    INSERT --> CRACK[insert_surface_crack: semi-ellipsoid cut]
+    PORE --> TAG[Physical groups tagged]
+    SLAG --> TAG
+    UND --> TAG
+    LOF --> TAG
+    CRACK --> TAG
+    TAG --> CLEAN[removeAllDuplicates + synchronize]
+    CLEAN --> MESH[generate_mesh]
+    MESH --> KD[fatigue.knockdown.defect_knockdown]
+    KD --> OUT[extensions defects population + worst_fat]

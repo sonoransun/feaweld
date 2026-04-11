@@ -311,5 +311,76 @@ def study_compare(case_files: tuple[str, ...], baseline: str | None,
         click.echo(f"Report generation failed: {e}")
 
 
+# ---------------------------------------------------------------------------
+# Defect acceptance criteria
+# ---------------------------------------------------------------------------
+
+@main.group()
+def defects() -> None:
+    """Defect acceptance criteria and downgrade helpers."""
+    pass
+
+
+@defects.command("list")
+@click.option(
+    "--standard", default="ISO 5817",
+    help="Standard to display (ISO 5817, ASME BPVC IX, AWS D1.1, BS 7910)",
+)
+@click.option("--level", default=None, help="Quality level key (B/C/D or normal/severe)")
+def defects_list(standard: str, level: str | None) -> None:
+    """List bundled defect acceptance criteria."""
+    from feaweld.defects.loader import load_acceptance_criteria
+
+    data = load_acceptance_criteria(standard)
+    click.echo(f"Standard: {data.get('standard', standard)}")
+    levels = data.get("levels", {})
+    if level:
+        entry = levels.get(level)
+        if not entry:
+            click.echo(f"Level {level!r} not found. Available: {list(levels.keys())}")
+            return
+        for k, v in entry.items():
+            click.echo(f"  {k}: {v}")
+    else:
+        for lvl, entry in levels.items():
+            click.echo(f"Level {lvl}:")
+            for k, v in entry.items():
+                click.echo(f"  {k}: {v}")
+
+
+@main.command()
+def groove_types() -> None:
+    """List available groove preparations with a schematic."""
+    click.echo("Available groove preparations:")
+    click.echo("  V-groove  - classic single-bevel V (feaweld.geometry.groove.VGroove)")
+    click.echo("  U-groove  - curved root U (feaweld.geometry.groove.UGroove)")
+    click.echo("  J-groove  - asymmetric one-sided (feaweld.geometry.groove.JGroove)")
+    click.echo("  X-groove  - double-V symmetric (feaweld.geometry.groove.XGroove)")
+    click.echo("  K-groove  - single-bevel one-sided (feaweld.geometry.groove.KGroove)")
+
+
+@main.command("j-integral")
+@click.argument("results_file", type=click.Path(exists=True))
+@click.option("--crack-tip", required=True, help="Crack tip coordinates as x,y[,z]")
+@click.option("--radius", type=float, default=2.0, help="q-function radius (mm)")
+def j_integral_cmd(results_file: str, crack_tip: str, radius: float) -> None:
+    """Run the 2D J-integral on a saved VTK FE result."""
+    try:
+        import pyvista as pv
+    except ImportError:
+        click.echo("PyVista required: pip install feaweld[viz]")
+        raise SystemExit(1)
+
+    mesh = pv.read(results_file)
+    tip = np.array([float(x) for x in crack_tip.split(",")])
+    if tip.size == 2:
+        tip = np.append(tip, 0.0)
+    click.echo(f"Loaded mesh with {mesh.n_points} nodes, {mesh.n_cells} cells.")
+    click.echo(f"Crack tip: {tip}")
+    click.echo(f"Radius: {radius} mm")
+    click.echo("j-integral CLI stub: full VTK-to-FEAResults conversion not in MVP.")
+    click.echo("Use the library API directly: feaweld.fracture.j_integral_2d(...)")
+
+
 if __name__ == "__main__":
     main()

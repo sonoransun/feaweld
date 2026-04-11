@@ -1,0 +1,16 @@
+{
+  "standard": "BS 7910 Annex F",
+  "description": "Simplified pore and slag inclusion FAT downgrade tables derived from BS 7910 Annex F fatigue assessment guidance.",
+  "pore_downgrade": [
+    { "d_over_t": 0.02, "factor": 1.00 },
+    { "d_over_t": 0.05, "factor": 0.85 },
+    { "d_over_t": 0.10, "factor": 0.65 },
+    { "d_over_t": 0.20, "factor": 0.50 }
+  ],
+  "slag_downgrade": [
+    { "length_mm":  2.0, "factor": 1.00 },
+    { "length_mm":  5.0, "factor": 0.90 },
+    { "length_mm": 10.0, "factor": 0.75 },
+    { "length_mm": 20.0, "factor": 0.60 }
+  ]
+}

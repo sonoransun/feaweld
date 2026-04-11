@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 from numpy.typing import NDArray
@@ -67,6 +67,20 @@ class JointType(str, Enum):
     LAP = "lap"
     CORNER = "corner"
     CRUCIFORM = "cruciform"
+    # 3D groove preparations (Track D)
+    V_GROOVE = "v_groove"
+    U_GROOVE = "u_groove"
+    J_GROOVE = "j_groove"
+    X_GROOVE = "x_groove"
+    K_GROOVE = "k_groove"
+    # Fastener welds
+    PLUG = "plug"
+    SLOT = "slot"
+    STUD = "stud"
+    SPOT = "spot"
+    # Spline / volumetric
+    SPLINE_BUTT = "spline_butt"
+    VOLUMETRIC_FILLET = "volumetric_fillet"
 
 
 # ---------------------------------------------------------------------------
@@ -204,6 +218,61 @@ class StressField:
             principals[i] = np.sort(np.linalg.eigvalsh(tensor))
         return principals
 
+    @property
+    def hydrostatic(self) -> NDArray[np.float64]:
+        """Hydrostatic (mean normal) stress: (σ_xx + σ_yy + σ_zz) / 3."""
+        s = self.values
+        return (s[:, 0] + s[:, 1] + s[:, 2]) / 3.0
+
+    @property
+    def deviatoric(self) -> NDArray[np.float64]:
+        """Deviatoric stress tensor in Voigt form, (n_points, 6)."""
+        s = self.values
+        p = self.hydrostatic
+        dev = s.copy()
+        dev[:, 0] -= p
+        dev[:, 1] -= p
+        dev[:, 2] -= p
+        return dev
+
+    @property
+    def octahedral_shear(self) -> NDArray[np.float64]:
+        """Octahedral shear stress: τ_oct = sqrt(2/3) * ||deviatoric||.
+
+        Equivalent to (sqrt(2)/3) * σ_vm.
+        """
+        return np.sqrt(2.0) / 3.0 * self.von_mises
+
+    @property
+    def invariants(self) -> NDArray[np.float64]:
+        """Principal invariants (I_1, I_2, I_3) of the full stress tensor."""
+        s = self.values
+        I1 = s[:, 0] + s[:, 1] + s[:, 2]
+        I2 = (
+            s[:, 0] * s[:, 1] + s[:, 1] * s[:, 2] + s[:, 0] * s[:, 2]
+            - s[:, 3] ** 2 - s[:, 4] ** 2 - s[:, 5] ** 2
+        )
+        I3 = (
+            s[:, 0] * s[:, 1] * s[:, 2]
+            + 2.0 * s[:, 3] * s[:, 4] * s[:, 5]
+            - s[:, 0] * s[:, 4] ** 2
+            - s[:, 1] * s[:, 5] ** 2
+            - s[:, 2] * s[:, 3] ** 2
+        )
+        return np.stack([I1, I2, I3], axis=1)
+
+    @property
+    def signed_von_mises(self) -> NDArray[np.float64]:
+        """Von Mises equivalent stress signed by the sign of the max principal.
+
+        Useful for mean-stress-aware fatigue: positive under tension-dominated
+        multi-axial states, negative under compression-dominated ones.
+        """
+        vm = self.von_mises
+        max_principal = self.principal[:, -1]
+        sign = np.where(max_principal >= 0.0, 1.0, -1.0)
+        return sign * vm
+
 
 @dataclass
 class FEAResults:
@@ -330,3 +399,76 @@ class WeldLineDefinition:
     plate_thickness: float                 # plate thickness t (mm)
     normal_direction: NDArray[np.float64]  # unit vector normal to plate surface
     weld_side: str = "toe"                 # "toe" or "root"
+    # Optional spline path for arc-length-parameterized stress extraction.
+    # Kept as Any to avoid an import cycle with geometry.weld_path; runtime
+    # callers type-check via duck typing on .evaluate / .tangent / .arc_length.
+    path: Any | None = None
+
+
+# ---------------------------------------------------------------------------
+# Multi-pass welding sequence (Track G)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class WeldPass:
+    """A single pass in a multi-pass welding sequence.
+
+    Attributes
+    ----------
+    order:
+        1-based pass index used as the dispatch key.
+    pass_type:
+        Label indicating the pass role ("root", "fill" or "cap").
+    bead_area:
+        Deposited cross-section area (mm^2), used to estimate volume.
+    start_time:
+        Simulation time (s) at which the pass begins depositing.
+    duration:
+        Pass duration (s); the pass is considered active over
+        [start_time, start_time + duration).
+    voltage, current, travel_speed, efficiency:
+        Arc process parameters feeding the Goldak source for this pass.
+    path_description:
+        Free-form label for the per-pass trajectory (MVP placeholder).
+    """
+    order: int
+    pass_type: Literal["root", "fill", "cap"] = "fill"
+    bead_area: float = 0.0
+    start_time: float = 0.0
+    duration: float = 0.0
+    voltage: float = 25.0
+    current: float = 200.0
+    travel_speed: float = 5.0
+    efficiency: float = 0.8
+    path_description: str = "straight"
+
+
+@dataclass
+class WeldSequence:
+    """Ordered sequence of weld passes with preheat / interpass constraints."""
+    passes: list[WeldPass] = field(default_factory=list)
+    preheat_temp: float = 20.0         # degC
+    interpass_temp_max: float = 250.0  # degC
+    interpass_cooldown_s: float = 0.0  # cooldown time between passes (s)
+
+    def __post_init__(self) -> None:
+        # Validate monotone start_times.
+        for i in range(1, len(self.passes)):
+            if self.passes[i].start_time < self.passes[i - 1].start_time - 1e-9:
+                raise ValueError(
+                    f"WeldPass start_time must be monotonically non-decreasing "
+                    f"at order {self.passes[i].order}"
+                )
+
+    def total_duration(self) -> float:
+        """Return total simulated duration spanning all passes."""
+        if not self.passes:
+            return 0.0
+        return max(p.start_time + p.duration for p in self.passes)
+
+    def active_pass_at(self, t: float) -> WeldPass | None:
+        """Return the pass active at time ``t``, or ``None``."""
+        for p in self.passes:
+            if p.start_time <= t < p.start_time + p.duration:
+                return p
+        return None

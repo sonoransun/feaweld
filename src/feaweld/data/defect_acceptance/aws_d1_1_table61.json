@@ -1,0 +1,22 @@
+{
+  "standard": "AWS D1.1 Table 6.1",
+  "description": "Simplified visual / NDT acceptance criteria adapted from AWS D1.1 structural welding code Table 6.1.",
+  "levels": {
+    "statically_loaded": {
+      "pore_max_d_over_t": 0.04,
+      "pore_absolute_max_mm": 5.0,
+      "undercut_max_mm": 1.0,
+      "cluster_area_max_mm2": 25.0,
+      "slag_length_max_mm": 6.0,
+      "lof_max_length_mm": 2.0
+    },
+    "dynamically_loaded": {
+      "pore_max_d_over_t": 0.02,
+      "pore_absolute_max_mm": 2.5,
+      "undercut_max_mm": 0.25,
+      "cluster_area_max_mm2": 10.0,
+      "slag_length_max_mm": 2.0,
+      "lof_max_length_mm": 0.0
+    }
+  }
+}

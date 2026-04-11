@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import math
 
+import numpy as np
+
 from feaweld.core.types import SNCurve, SNSegment, SNStandard
 
 # ---------------------------------------------------------------------------
@@ -248,6 +250,90 @@ def get_sn_curve(standard: str, name: str) -> SNCurve:
     if std == "asme":
         return asme_curve(name)
     raise ValueError(f"Unknown standard '{standard}'. Choose from iiw, dnv, asme.")
+
+
+def life_with_scatter(
+    curve: SNCurve,
+    stress_range: float,
+    scatter_std_log10_N: float = 0.2,
+    n_samples: int = 2000,
+    seed: int = 0,
+) -> dict[str, float]:
+    """Compute N as a lognormal distribution around the deterministic S-N life.
+
+    Standards like IIW FAT curves have a fixed log-N scatter (~0.2 in
+    log10-N for welds, i.e. factor-of-~1.6 per standard deviation); we
+    apply it as a multiplicative lognormal on the deterministic life.
+    Returns a dict with keys: mean, std, p05, p50, p95.
+    """
+    N_det = curve.life(stress_range)
+    if not math.isfinite(N_det) or N_det <= 0:
+        return {
+            "mean": N_det,
+            "std": 0.0,
+            "p05": N_det,
+            "p50": N_det,
+            "p95": N_det,
+        }
+
+    rng = np.random.default_rng(seed)
+    # Multiplicative lognormal: log10(N) ~ N(log10(N_det), scatter_std_log10_N)
+    # Convert log10 std to natural-log std for rng.lognormal.
+    sigma_ln = scatter_std_log10_N * math.log(10.0)
+    mu_ln = math.log(N_det)
+    samples = rng.lognormal(mean=mu_ln, sigma=sigma_ln, size=n_samples)
+
+    return {
+        "mean": float(np.mean(samples)),
+        "std": float(np.std(samples)),
+        "p05": float(np.percentile(samples, 5.0)),
+        "p50": float(np.percentile(samples, 50.0)),
+        "p95": float(np.percentile(samples, 95.0)),
+    }
+
+
+def life_with_scatter_stress(
+    curve: SNCurve,
+    stress_mean: float,
+    stress_std: float,
+    scatter_std_log10_N: float = 0.2,
+    n_samples: int = 2000,
+    seed: int = 0,
+) -> dict[str, float]:
+    """Two-source UQ: propagate both stress-range and S-N scatter into life.
+
+    Samples stress range from a normal distribution (truncated at >0) and
+    S-N life from a lognormal scatter band around the deterministic curve.
+    Returns a dict with keys: mean, std, p05, p50, p95.
+    """
+    rng = np.random.default_rng(seed)
+    stress_samples = rng.normal(stress_mean, stress_std, size=n_samples)
+    # Reject non-positive stress samples and resample as needed.
+    stress_samples = np.clip(stress_samples, 1e-12, None)
+
+    N_det = np.array([curve.life(float(s)) for s in stress_samples])
+    finite = np.isfinite(N_det) & (N_det > 0)
+    if not np.any(finite):
+        return {
+            "mean": float("inf"),
+            "std": 0.0,
+            "p05": float("inf"),
+            "p50": float("inf"),
+            "p95": float("inf"),
+        }
+
+    sigma_ln = scatter_std_log10_N * math.log(10.0)
+    scatter = rng.lognormal(mean=0.0, sigma=sigma_ln, size=n_samples)
+    samples = N_det * scatter
+    samples = samples[finite]
+
+    return {
+        "mean": float(np.mean(samples)),
+        "std": float(np.std(samples)),
+        "p05": float(np.percentile(samples, 5.0)),
+        "p50": float(np.percentile(samples, 50.0)),
+        "p95": float(np.percentile(samples, 95.0)),
+    }
 
 
 def get_sn_curve_by_detail(detail_number: int) -> SNCurve:

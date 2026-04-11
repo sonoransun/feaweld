@@ -1,0 +1,24 @@
+classDiagram
+    class SolverBackend {
+        <<abstract>>
+        +solve_static(mesh, material, load_case, temperature)
+        +solve_thermal_steady(mesh, material, load_case)
+        +solve_thermal_transient(mesh, material, load_case, time_steps)
+        +solve_coupled(mesh, material, mech_lc, thermal_lc, time_steps)
+    }
+    class CalculiXBackend
+    SolverBackend <|-- CalculiXBackend
+    class FEniCSBackend
+    SolverBackend <|-- FEniCSBackend
+    class JAXBackend
+    SolverBackend <|-- JAXBackend
+    class NeuralBackend
+    SolverBackend <|-- NeuralBackend
+    class _FakeAnalyticBackend
+    SolverBackend <|-- _FakeAnalyticBackend
+    class JAXConstitutiveModel {
+        <<protocol>>
+        +stress(strain)
+        +tangent(strain)
+    }
+    JAXBackend o-- JAXConstitutiveModel : uses

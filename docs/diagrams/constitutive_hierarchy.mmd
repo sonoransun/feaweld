@@ -1,0 +1,29 @@
+classDiagram
+    class ConstitutiveModel {
+        <<abstract>>
+        +stress(strain, state)
+        +tangent(strain, state)
+    }
+    class LinearElastic
+    class J2Plastic
+    class TemperatureDependent
+
+    ConstitutiveModel <|-- LinearElastic
+    ConstitutiveModel <|-- J2Plastic
+    ConstitutiveModel <|-- TemperatureDependent
+
+    class JAXConstitutiveModel {
+        <<protocol>>
+        +stress(strain)
+        +tangent(strain)
+    }
+    class JAXLinearElastic
+    class JAXJ2Plasticity
+    class JAXCrystalPlasticity
+
+    JAXConstitutiveModel <|.. JAXLinearElastic
+    JAXConstitutiveModel <|.. JAXJ2Plasticity
+    JAXConstitutiveModel <|.. JAXCrystalPlasticity
+
+    LinearElastic ..> JAXLinearElastic : mirror
+    J2Plastic ..> JAXJ2Plasticity : mirror

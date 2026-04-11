@@ -1,0 +1,10 @@
+stateDiagram-v2
+    [*] --> Ingest : MQTT / OPC-UA stream
+    Ingest --> Observe : strain_gauge reading
+    Observe --> Assimilate : CrackEnKF.predict
+    Assimilate --> Update : CrackEnKF.update
+    Update --> Posterior : mean crack length and std
+    Posterior --> Check : std exceeds alarm threshold?
+    Check --> Alert : yes, dashboard.trigger
+    Check --> Ingest : no, continue streaming
+    Alert --> [*]

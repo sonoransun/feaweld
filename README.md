@@ -176,6 +176,71 @@ ASME VIII Division 2 stress categorization with gradient utilization display and
   <img src="docs/images/example_asme_check.svg" alt="ASME stress check" width="70%">
 </p>
 
+<!-- ADVANCED_CONCEPTS_START -->
+## Advanced Concepts
+
+feaweld extends well beyond the classical IIW / ASME / DNV workflow. The full
+catalog of advanced concepts — differentiable FEA, phase-field fracture,
+Bayesian surrogates, active learning, multi-pass welding, spline paths,
+volumetric joints, defect populations, multi-axial fatigue, fracture mechanics
+— lives in [docs/CONCEPTS.md](docs/CONCEPTS.md).
+
+### Phase-field fracture (crack propagation)
+
+<p align="center">
+  <img src="docs/animations/phase_field_crack_propagation.gif" alt="Phase field crack propagation" width="80%">
+</p>
+
+### Multi-pass welding thermal cycle
+
+<p align="center">
+  <img src="docs/animations/multipass_thermal_cycle.gif" alt="Multipass thermal cycle" width="80%">
+</p>
+
+### Active learning over parametric studies
+
+<p align="center">
+  <img src="docs/animations/active_learning_convergence.gif" alt="Active learning convergence" width="80%">
+</p>
+
+### EnKF crack-length assimilation
+
+<p align="center">
+  <img src="docs/animations/enkf_crack_tracking.gif" alt="EnKF crack-length tracking" width="80%">
+</p>
+
+### Solver backend hierarchy
+
+```mermaid
+classDiagram
+    class SolverBackend {
+        <<abstract>>
+        +solve_static(mesh, material, load_case, temperature)
+        +solve_thermal_steady(mesh, material, load_case)
+        +solve_thermal_transient(mesh, material, load_case, time_steps)
+        +solve_coupled(mesh, material, mech_lc, thermal_lc, time_steps)
+    }
+    class FEniCSBackend
+    class CalculiXBackend
+    class JAXBackend
+    class NeuralBackend
+    SolverBackend <|-- FEniCSBackend
+    SolverBackend <|-- CalculiXBackend
+    SolverBackend <|-- JAXBackend
+    SolverBackend <|-- NeuralBackend
+    class JAXConstitutiveModel {
+        <<protocol>>
+        +stress(strain)
+        +tangent(strain)
+    }
+    JAXBackend o-- JAXConstitutiveModel : uses
+```
+
+See [docs/CONCEPTS.md](docs/CONCEPTS.md) for the full index of 8 mermaid
+architecture diagrams, 23 high-resolution concept images, and 9 animations
+covering every advanced feature.
+<!-- ADVANCED_CONCEPTS_END -->
+
 ## Standards Coverage
 
 | Standard | Implementation |

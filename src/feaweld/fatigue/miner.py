@@ -96,3 +96,81 @@ def fatigue_life(
         "equivalent_stress_range": S_eq,
         "estimated_life": estimated_life,
     }
+
+
+def miner_damage_with_uq(
+    stress_ranges_mean: np.ndarray,
+    stress_ranges_std: np.ndarray,
+    counts: np.ndarray,
+    curve: SNCurve,
+    scatter_std_log10_N: float = 0.2,
+    n_mc: int = 2000,
+    seed: int = 0,
+) -> dict[str, float]:
+    """Monte Carlo propagation of stress + S-N scatter through Miner's rule.
+
+    Returns dict with keys: damage_mean, damage_std, damage_p05, damage_p95,
+    life_mean, life_std, life_p05, life_p95.
+    """
+    stress_mean = np.asarray(stress_ranges_mean, dtype=float)
+    stress_std = np.asarray(stress_ranges_std, dtype=float)
+    counts_arr = np.asarray(counts, dtype=float)
+
+    if stress_mean.shape != stress_std.shape or stress_mean.shape != counts_arr.shape:
+        raise ValueError(
+            "stress_ranges_mean, stress_ranges_std and counts must share shape"
+        )
+
+    n_bins = stress_mean.size
+    rng = np.random.default_rng(seed)
+    sigma_ln = scatter_std_log10_N * math.log(10.0)
+
+    damage_samples = np.zeros(n_mc)
+    for i in range(n_mc):
+        s_samples = rng.normal(stress_mean, stress_std)
+        s_samples = np.clip(s_samples, 1e-12, None)
+        D = 0.0
+        for j in range(n_bins):
+            s = float(s_samples[j])
+            if s <= 0 or counts_arr[j] <= 0:
+                continue
+            N_det = curve.life(s)
+            if not math.isfinite(N_det) or N_det <= 0:
+                continue
+            # Per-bin lognormal scatter on N.
+            N_scatter = N_det * float(rng.lognormal(mean=0.0, sigma=sigma_ln))
+            if N_scatter > 0:
+                D += counts_arr[j] / N_scatter
+        damage_samples[i] = D
+
+    finite_D = damage_samples > 0
+    life_samples = np.where(finite_D, 1.0 / np.where(finite_D, damage_samples, 1.0), np.inf)
+
+    def _percentile_finite(arr: np.ndarray, q: float) -> float:
+        vals = arr[np.isfinite(arr)]
+        if vals.size == 0:
+            return float("inf")
+        return float(np.percentile(vals, q))
+
+    def _mean_finite(arr: np.ndarray) -> float:
+        vals = arr[np.isfinite(arr)]
+        if vals.size == 0:
+            return float("inf")
+        return float(np.mean(vals))
+
+    def _std_finite(arr: np.ndarray) -> float:
+        vals = arr[np.isfinite(arr)]
+        if vals.size == 0:
+            return 0.0
+        return float(np.std(vals))
+
+    return {
+        "damage_mean": float(np.mean(damage_samples)),
+        "damage_std": float(np.std(damage_samples)),
+        "damage_p05": float(np.percentile(damage_samples, 5.0)),
+        "damage_p95": float(np.percentile(damage_samples, 95.0)),
+        "life_mean": _mean_finite(life_samples),
+        "life_std": _std_finite(life_samples),
+        "life_p05": _percentile_finite(life_samples, 5.0),
+        "life_p95": _percentile_finite(life_samples, 95.0),
+    }

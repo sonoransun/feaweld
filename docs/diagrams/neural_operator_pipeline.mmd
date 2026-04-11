@@ -1,0 +1,12 @@
+flowchart LR
+    A[AnalysisCase template] --> S[pipeline.study.Study<br/>random parameter sweep]
+    S --> GT{ground truth backend}
+    GT --> JAX[JAXBackend]
+    GT --> FE[FEniCSBackend]
+    JAX --> DATA[(X, y) training set<br/>load params to displacement field]
+    FE --> DATA
+    DATA --> TR[Flax DeepONet<br/>branch + trunk networks]
+    TR --> LOSS[MSE training<br/>optax.adam]
+    LOSS --> SAVED[params.msgpack + meta.json<br/>mesh_hash stamped]
+    SAVED --> NB[NeuralBackend.load_model]
+    NB --> INFER[solve_static in ~10 ms<br/>mesh hash guard]

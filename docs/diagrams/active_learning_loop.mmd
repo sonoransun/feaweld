@@ -1,0 +1,10 @@
+stateDiagram-v2
+    [*] --> InitialLHS : n_initial random samples
+    InitialLHS --> Evaluate
+    Evaluate --> FitSurrogate : BayesianFatigueSurrogate.fit
+    FitSurrogate --> Acquire : max_variance / EI / random
+    Acquire --> PickNext : argmax acquisition
+    PickNext --> Evaluate : runner(case)
+    Evaluate --> Check : enough iterations?
+    Check --> Acquire : no
+    Check --> [*] : yes, return ActiveLearningResults

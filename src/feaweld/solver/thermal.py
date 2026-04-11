@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 import numpy as np
 from numpy.typing import NDArray
+
+if TYPE_CHECKING:
+    from feaweld.core.types import WeldPass, WeldSequence
 
 
 @dataclass
@@ -252,3 +256,82 @@ class ElementBirthDeath:
     def activate_all(self) -> None:
         """Activate all weld elements at once (e.g. for non-deposition analyses)."""
         self._alive[:] = True
+
+
+# ---------------------------------------------------------------------------
+# Multi-pass dispatch (Track G)
+# ---------------------------------------------------------------------------
+
+# Default Goldak geometric parameters (mm) used when a ``WeldPass`` does not
+# carry its own semi-axis configuration. These mirror the defaults used
+# across the rest of the codebase (see ``core.loads.WeldingHeatInput``).
+_DEFAULT_A_F = 5.0
+_DEFAULT_A_R = 10.0
+_DEFAULT_B = 5.0
+_DEFAULT_C = 5.0
+_DEFAULT_F_F = 0.6
+_DEFAULT_F_R = 1.4
+
+
+@dataclass
+class MultiPassHeatSource:
+    """Dispatch to a per-pass :class:`GoldakHeatSource` by simulation time.
+
+    Each :class:`~feaweld.core.types.WeldPass` in the supplied
+    :class:`~feaweld.core.types.WeldSequence` owns a :class:`GoldakHeatSource`
+    constructed from its voltage / current / travel_speed / efficiency.
+    :meth:`evaluate` routes a query to whichever pass is active at time
+    ``t``; before the first pass, between passes, and after the final pass
+    the source returns ``0``.
+
+    The per-pass source uses default double-ellipsoid semi-axes matching
+    :class:`feaweld.core.loads.WeldingHeatInput`. Advanced users can assign
+    into :attr:`_sources` after construction to customise individual passes.
+    """
+    sequence: "WeldSequence"
+    _sources: dict[int, GoldakHeatSource] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        for p in self.sequence.passes:
+            power = p.voltage * p.current * p.efficiency
+            self._sources[p.order] = GoldakHeatSource(
+                power=power,
+                a_f=_DEFAULT_A_F,
+                a_r=_DEFAULT_A_R,
+                b=_DEFAULT_B,
+                c=_DEFAULT_C,
+                f_f=_DEFAULT_F_F,
+                f_r=_DEFAULT_F_R,
+                travel_speed=p.travel_speed,
+            )
+
+    def evaluate(
+        self, x: NDArray, y: NDArray, z: NDArray, t: float
+    ) -> NDArray | float:
+        """Evaluate the active pass's heat source at ``(x, y, z, t)``.
+
+        Returns a scalar ``0.0`` when no pass is active at ``t``; otherwise
+        delegates to the corresponding :class:`GoldakHeatSource` with a
+        time origin shifted to the pass ``start_time``.
+        """
+        p = self.sequence.active_pass_at(float(t))
+        if p is None:
+            return 0.0
+        src = self._sources[p.order]
+        return src.evaluate(x, y, z, float(t) - p.start_time)
+
+    def power_history(self, times: NDArray) -> NDArray:
+        """Instantaneous total power (W) at each time in ``times``.
+
+        Intended for validation / plotting. Returns an array matching
+        the shape of ``times``; entries outside any pass window are ``0``.
+        """
+        times_arr = np.asarray(times, dtype=np.float64)
+        powers = np.zeros_like(times_arr, dtype=np.float64)
+        flat = powers.reshape(-1)
+        for i, t in enumerate(times_arr.reshape(-1)):
+            p = self.sequence.active_pass_at(float(t))
+            if p is None:
+                continue
+            flat[i] = p.voltage * p.current * p.efficiency
+        return powers

@@ -1,0 +1,29 @@
+flowchart TD
+    YAML[AnalysisCase YAML] --> LOAD[load_case]
+    LOAD --> MAT[core.materials.Material]
+    MAT --> GEO[geometry.joints / joints3d / spline_joints / fastener_welds]
+    GEO --> DEFECT{DefectConfig.enabled?}
+    DEFECT -- yes --> POP[defects.population.sample_iso5817_population]
+    POP --> INSERT[defects.insertion.insert_all]
+    DEFECT -- no --> MESH
+    INSERT --> MESH[mesh.generator.generate_mesh]
+    MESH --> BACKEND{SolverConfig.backend}
+    BACKEND -->|fenics| FE[FEniCSBackend]
+    BACKEND -->|calculix| CC[CalculiXBackend]
+    BACKEND -->|jax| JB[JAXBackend]
+    BACKEND -->|neural| NB[NeuralBackend]
+    FE --> FEA[FEAResults]
+    CC --> FEA
+    JB --> FEA
+    NB --> FEA
+    FEA --> POST[postprocess.hotspot / dong / linearization / ...]
+    POST --> MA{multiaxial_criterion != none?}
+    MA -- yes --> MAX[postprocess.multiaxial.findley / dang_van / ...]
+    MAX --> FATIGUE
+    MA -- no --> FATIGUE[fatigue.rainflow + miner + sn_curves]
+    FATIGUE --> UQ[_apply_fatigue_uq: lognormal bands]
+    UQ --> K{compute_k_factors?}
+    K -- yes --> JI[fracture.j_integral_2d]
+    K -- no --> REPORT
+    JI --> REPORT[pipeline.report.generate_report]
+    REPORT --> OUT[WorkflowResult + HTML report]

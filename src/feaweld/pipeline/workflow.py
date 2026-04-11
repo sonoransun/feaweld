@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 import numpy as np
@@ -18,7 +18,7 @@ from numpy.typing import NDArray
 from pydantic import BaseModel, Field
 
 from feaweld.core.types import (
-    JointType, SolverType, StressMethod, FEAResults, FEMesh,
+    JointType, SolverType, StressMethod, FEAResults, FEMesh, ElementType,
 )
 
 
@@ -28,6 +28,7 @@ class MaterialConfig(BaseModel):
     weld_metal: str = "E70XX"
     haz: str = "A36"  # often same as base with modified properties
     temperature: float = 20.0  # ambient temperature (C)
+    rve_path: str | None = None  # optional voxel RVE for FFT homogenization (.npz)
 
 
 class GeometryConfig(BaseModel):
@@ -75,6 +76,11 @@ class PostProcessConfig(BaseModel):
     sn_curve: str = "IIW_FAT90"
     fatigue_assessment: bool = True
     singularity_check: bool = True
+    multiaxial_criterion: Literal[
+        "none", "findley", "dang_van", "sines", "crossland",
+        "fatemi_socie", "mcdiarmid",
+    ] = "none"
+    compute_k_factors: bool = False
 
 
 class ThermalConfig(BaseModel):
@@ -98,6 +104,46 @@ class ProbabilisticConfig(BaseModel):
     include_geometric_tolerance: bool = True
 
 
+class DefectConfig(BaseModel):
+    """Weld-defect population configuration.
+
+    Controls ISO 5817 stochastic defect sampling or explicit defect
+    definitions fed into the optional Track E/H defect pipeline. The
+    defect hook runs post-geometry and populates
+    ``WorkflowResult.extensions["defects"]``.
+    """
+    enabled: bool = False
+    standard: str = "ISO 5817"
+    quality_level: str = "B"
+    weld_length: float = 100.0       # mm
+    weld_width: float = 10.0         # mm
+    population_seed: int = 0
+    # If non-empty, use these explicit defect dicts instead of sampling.
+    explicit_defects: list[dict] = Field(default_factory=list)
+
+
+class MultiPassConfig(BaseModel):
+    """Multi-pass welding sequence configuration.
+
+    When enabled, the workflow loads a named
+    :class:`feaweld.core.types.WeldSequence` JSON from the bundled
+    ``multipass_sequences/`` data directory and records summary metadata
+    on ``WorkflowResult.extensions["multipass"]``.
+    """
+    enabled: bool = False
+    sequence_name: str | None = None  # e.g. "v_groove_3pass"
+    preheat_temp: float = 20.0
+    interpass_temp_max: float = 250.0
+
+
+class WeldPathConfig(BaseModel):
+    """Weld-path trajectory configuration (straight vs. spline)."""
+    mode: Literal["straight", "spline"] = "straight"
+    control_points: list[tuple[float, float, float]] = Field(default_factory=list)
+    spline_mode: Literal["linear", "bspline", "catmull_rom"] = "bspline"
+    spline_degree: int = 3
+
+
 class AnalysisCase(BaseModel):
     """Complete analysis case definition."""
     name: str = "default"
@@ -110,6 +156,9 @@ class AnalysisCase(BaseModel):
     postprocess: PostProcessConfig = Field(default_factory=PostProcessConfig)
     thermal: ThermalConfig = Field(default_factory=ThermalConfig)
     probabilistic: ProbabilisticConfig = Field(default_factory=ProbabilisticConfig)
+    defects: DefectConfig = Field(default_factory=DefectConfig)
+    multipass: MultiPassConfig = Field(default_factory=MultiPassConfig)
+    weld_path: WeldPathConfig = Field(default_factory=WeldPathConfig)
     output_dir: str = "results"
 
 
@@ -124,6 +173,7 @@ class WorkflowResult:
     probabilistic_results: dict[str, Any] = field(default_factory=dict)
     report_path: str | None = None
     errors: list[str] = field(default_factory=list)
+    extensions: dict[str, Any] = field(default_factory=dict)
 
     @property
     def success(self) -> bool:
@@ -165,6 +215,15 @@ def run_analysis(case: AnalysisCase) -> WorkflowResult:
         WorkflowResult with all results.
     """
     result = WorkflowResult(case=case)
+
+    # Step 0: Defect population (Track E/H) — runs outside the main
+    # pipeline try block so it still populates extensions even if the
+    # geometry/mesh/solver stages fail (e.g. missing Gmsh in sandbox).
+    if case.defects.enabled:
+        try:
+            _apply_defect_population(result, case)
+        except Exception as e:  # pragma: no cover - best-effort hook
+            result.errors.append(f"Defect population: {e}")
 
     try:
         # Step 1: Materials
@@ -217,6 +276,13 @@ def run_analysis(case: AnalysisCase) -> WorkflowResult:
 
         result.fea_results = fea_results
 
+        # Step 4b: Multi-pass sequence metadata (Track G/H).
+        if case.multipass.enabled:
+            try:
+                _apply_multipass_metadata(result, case)
+            except Exception as e:  # pragma: no cover - best-effort hook
+                result.errors.append(f"Multi-pass metadata: {e}")
+
         # Step 5: Post-processing
         if fea_results.stress is not None:
             for method in case.postprocess.stress_methods:
@@ -226,6 +292,13 @@ def run_analysis(case: AnalysisCase) -> WorkflowResult:
                 except Exception as e:
                     result.errors.append(f"Post-processing {method}: {e}")
 
+        # Step 5b: Multi-axial fatigue criterion (Track F/H).
+        if case.postprocess.multiaxial_criterion != "none":
+            try:
+                _apply_multiaxial_criterion(result, case)
+            except Exception as e:
+                result.errors.append(f"Multi-axial fatigue: {e}")
+
         # Step 6: Fatigue
         if case.postprocess.fatigue_assessment and result.postprocess_results:
             try:
@@ -233,6 +306,19 @@ def run_analysis(case: AnalysisCase) -> WorkflowResult:
                 result.fatigue_results = fatigue
             except Exception as e:
                 result.errors.append(f"Fatigue assessment: {e}")
+
+            # UQ propagation: lognormal scatter around deterministic life.
+            try:
+                _apply_fatigue_uq(result, case)
+            except Exception as e:
+                result.errors.append(f"Fatigue UQ: {e}")
+
+        # Step 6b: Optional J-integral / K-factor evaluation (Track F/H).
+        if case.postprocess.compute_k_factors:
+            try:
+                _apply_j_integral(result, case)
+            except Exception as e:
+                result.errors.append(f"J-integral: {e}")
 
         # Step 7: Probabilistic
         if case.probabilistic.enabled:
@@ -376,6 +462,213 @@ def _run_fatigue_assessment(postprocess_results, case):
             fatigue[method] = {"stress_range": stress, "life": life}
 
     return fatigue
+
+
+def _apply_fatigue_uq(
+    result: WorkflowResult,
+    case: AnalysisCase,
+    scatter_std_log10_N: float = 0.2,
+    n_mc: int = 2000,
+    seed: int = 0,
+) -> None:
+    """Augment fatigue_results with lognormal UQ bands around each life."""
+    from feaweld.fatigue.sn_curves import get_sn_curve, life_with_scatter_stress
+
+    if not result.fatigue_results:
+        return
+
+    sn_spec = case.postprocess.sn_curve
+    if "_" in sn_spec:
+        parts = sn_spec.split("_", 1)
+        curve = get_sn_curve(parts[0].lower(), parts[1])
+    else:
+        curve = get_sn_curve("iiw", sn_spec)
+
+    for method, entry in result.fatigue_results.items():
+        if not isinstance(entry, dict):
+            continue
+        if "stress_range" not in entry or "life" not in entry:
+            continue
+        stress_mean = float(entry["stress_range"])
+        if stress_mean <= 0:
+            continue
+        stress_std = 0.05 * stress_mean
+        band = life_with_scatter_stress(
+            curve,
+            stress_mean=stress_mean,
+            stress_std=stress_std,
+            scatter_std_log10_N=scatter_std_log10_N,
+            n_samples=n_mc,
+            seed=seed,
+        )
+        entry["mean"] = band["mean"]
+        entry["std"] = band["std"]
+        entry["p05"] = band["p05"]
+        entry["p95"] = band["p95"]
+
+    result.extensions["uq"] = {
+        "scatter_std_log10_N": scatter_std_log10_N,
+        "n_mc": n_mc,
+    }
+
+
+def _apply_defect_population(
+    result: WorkflowResult, case: AnalysisCase
+) -> None:
+    """Sample (or pass through) a defect population and record it.
+
+    MVP: no Gmsh-level insertion — we merely capture the list on
+    ``result.extensions["defects"]`` so downstream consumers (reports,
+    fatigue knockdown helpers, CLI) can inspect it.
+    """
+    defects: list = []
+    if case.defects.explicit_defects:
+        # Explicit dict form: we don't reconstruct concrete classes for the
+        # MVP — just carry the dicts through so the population count is
+        # non-zero and reports can render them verbatim.
+        defects = list(case.defects.explicit_defects)
+        result.extensions["defects"] = {
+            "population": defects,
+            "count": len(defects),
+            "source": "explicit",
+        }
+        return
+
+    from feaweld.defects.population import sample_iso5817_population
+
+    level = case.defects.quality_level
+    sampled = sample_iso5817_population(
+        level=level,
+        weld_length=case.defects.weld_length,
+        weld_width=case.defects.weld_width,
+        plate_thickness=case.geometry.base_thickness,
+        seed=case.defects.population_seed,
+    )
+    result.extensions["defects"] = {
+        "population": [d.description() for d in sampled],
+        "count": len(sampled),
+        "source": "sampled",
+        "standard": case.defects.standard,
+        "quality_level": level,
+    }
+
+
+def _apply_multipass_metadata(
+    result: WorkflowResult, case: AnalysisCase
+) -> None:
+    """Load a named multipass sequence JSON and stash summary metadata."""
+    sequence_name = case.multipass.sequence_name
+    if not sequence_name:
+        return
+
+    from feaweld.data.registry import DataRegistry
+    from feaweld.core.types import WeldPass, WeldSequence
+    import json
+
+    reg = DataRegistry()
+    key = f"multipass_sequences/{sequence_name}"
+    try:
+        path = reg.get_dataset_path(key)
+    except KeyError:
+        # Graceful pass-through when the sequence isn't bundled.
+        result.extensions["multipass"] = {
+            "sequence_name": sequence_name,
+            "n_passes": 0,
+            "total_duration": 0.0,
+            "status": "sequence_not_found",
+        }
+        return
+
+    with path.open("r", encoding="utf-8") as fh:
+        data = json.load(fh)
+
+    passes_data = data.get("passes", [])
+    passes = [WeldPass(**p) for p in passes_data]
+    seq = WeldSequence(
+        passes=passes,
+        preheat_temp=case.multipass.preheat_temp,
+        interpass_temp_max=case.multipass.interpass_temp_max,
+    )
+    result.extensions["multipass"] = {
+        "sequence_name": sequence_name,
+        "n_passes": len(seq.passes),
+        "total_duration": seq.total_duration(),
+    }
+
+
+def _apply_multiaxial_criterion(
+    result: WorkflowResult, case: AnalysisCase
+) -> None:
+    """Run a single multi-axial fatigue criterion over the FEA stress field."""
+    fea = result.fea_results
+    if fea is None or fea.stress is None:
+        return
+
+    from feaweld.postprocess import multiaxial as mx
+
+    criterion_map = {
+        "findley": mx.findley_criterion,
+        "dang_van": mx.dang_van_criterion,
+        "sines": mx.sines_criterion,
+        "crossland": mx.crossland_criterion,
+        "fatemi_socie": mx.fatemi_socie_criterion,
+        "mcdiarmid": mx.mcdiarmid_criterion,
+    }
+    name = case.postprocess.multiaxial_criterion
+    fn = criterion_map.get(name)
+    if fn is None:
+        return
+
+    # Treat current stress field as a single-timestep history.  Aggregate by
+    # picking the node with the largest damage-parameter contribution — for
+    # MVP we iterate over nodes and keep the worst.
+    values = np.asarray(fea.stress.values, dtype=float)  # (n_nodes, 6)
+    best_damage = -np.inf
+    best_normal = np.zeros(3)
+    for i in range(values.shape[0]):
+        history = values[i].reshape(1, 6)
+        try:
+            res = fn(history)
+        except Exception:
+            continue
+        if res.damage_parameter > best_damage:
+            best_damage = float(res.damage_parameter)
+            best_normal = np.asarray(res.critical_plane_normal, dtype=float)
+    if not np.isfinite(best_damage):
+        return
+    result.extensions["multiaxial_fatigue"] = {
+        "criterion": name,
+        "damage_parameter": best_damage,
+        "critical_plane_normal": best_normal.tolist(),
+    }
+
+
+def _apply_j_integral(
+    result: WorkflowResult, case: AnalysisCase
+) -> None:
+    """Run a 2D J-integral at the von-Mises peak as a crack-tip proxy."""
+    fea = result.fea_results
+    if fea is None or fea.stress is None:
+        return
+    mesh = fea.mesh
+    if mesh is None or mesh.element_type != ElementType.TRI3:
+        return
+
+    from feaweld.fracture.j_integral import j_integral_2d
+
+    vm = fea.stress.von_mises
+    tip_idx = int(np.argmax(vm))
+    tip = np.asarray(mesh.nodes[tip_idx, :2], dtype=float)
+
+    j_result = j_integral_2d(
+        fea_results=fea,
+        crack_tip=tip,
+        q_function_radius=2.0,
+    )
+    result.extensions["j_integral"] = {
+        "J": float(j_result.J_value),
+        "K_I": float(j_result.K_I),
+    }
 
 
 def _run_probabilistic(case, mat_set):

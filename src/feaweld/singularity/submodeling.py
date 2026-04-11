@@ -250,11 +250,31 @@ class SubmodelSolver:
             constraints=[bc],
         )
 
-    def solve(self) -> FEAResults:
+    def solve(
+        self,
+        phase_field: bool = False,
+        phase_field_config: "object | None" = None,
+        phase_field_material: "object | None" = None,
+    ) -> FEAResults:
         """Solve the submodel.
 
         This is a simplified linear-elastic solve.  For production use,
         this would delegate to the configured solver backend.
+
+        Parameters
+        ----------
+        phase_field:
+            If True, delegate to the variational phase-field fracture
+            solver (Track A4) using the current submodel mesh.  The
+            parent result's material is used unless ``phase_field_material``
+            is provided.  A :class:`feaweld.fracture.FractureResult` is
+            packaged into an :class:`FEAResults` and returned.
+        phase_field_config:
+            Optional :class:`feaweld.fracture.PhaseFieldConfig`; defaults
+            to the dataclass defaults when omitted.
+        phase_field_material:
+            Optional :class:`feaweld.core.materials.Material` override for
+            the phase-field solve.
 
         Returns
         -------
@@ -266,6 +286,36 @@ class SubmodelSolver:
         assert self._submodel_mesh is not None
 
         load_case = self.apply_boundary_conditions()
+
+        if phase_field:
+            from feaweld.fracture import PhaseFieldConfig, solve_phase_field
+
+            cfg = phase_field_config or PhaseFieldConfig()
+            mat = phase_field_material or self.parent_results.metadata.get(
+                "material"
+            )
+            if mat is None:
+                raise ValueError(
+                    "phase_field=True requires either phase_field_material "
+                    "or parent_results.metadata['material'] to be set."
+                )
+            fr = solve_phase_field(self._submodel_mesh, mat, load_case, cfg)
+
+            u_full = np.zeros((self._submodel_mesh.n_nodes, 3))
+            if fr.displacement.shape[1] == 2:
+                u_full[:, :2] = fr.displacement
+            else:
+                u_full[:, :] = fr.displacement
+            return FEAResults(
+                mesh=self._submodel_mesh,
+                displacement=u_full,
+                metadata={
+                    "submodel": True,
+                    "phase_field": True,
+                    "fracture_result": fr,
+                    "parent_mesh_size": self._parent_h,
+                },
+            )
 
         # Placeholder solve: interpolate parent stress onto submodel nodes.
         # A full solve would assemble and factor the stiffness matrix.

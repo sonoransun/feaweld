@@ -268,10 +268,70 @@ export_gltf(plotter, "model.gltf")        # web-ready 3D
 
 ## Regenerating Documentation Images
 
-All diagrams and example outputs in this guide are generated programmatically:
+All diagrams and example outputs in this guide are generated programmatically.
+The legacy round-0 conceptual SVGs (joint types, Blodgett shapes, S-N concept,
+linearization, Dong, hotspot, SED, Goldak, pipeline overview) are produced by:
 
 ```bash
 python scripts/generate_docs_images.py
 ```
 
-This produces SVG files in `docs/images/` from the feaweld API with synthetic data.
+The 23 advanced-concept images for the JAX backend, phase-field fracture,
+multi-axial fatigue, J-integral, defects, spline paths, groove profiles, and
+every other post-round-1/round-2 feature are produced by a separate script:
+
+```bash
+python scripts/generate_docs_concept_images.py
+# or only a subset:
+python scripts/generate_docs_concept_images.py --only jax_backend_flow bayesian_ensemble_uq
+```
+
+Both write SVG + PNG@300dpi pairs under `docs/images/`. Every figure calls
+into live feaweld code, so the images stay consistent with the current API.
+
+## Mermaid architecture diagrams
+
+Eight mermaid diagrams describing the run_analysis pipeline, solver / constitutive
+hierarchies, neural-operator training pipeline, active-learning and digital-twin
+state machines, defect insertion workflow, and multi-pass welding sequence live
+under `docs/diagrams/`. They render natively in GitHub Markdown and can also be
+rendered offline with the `mmdc` CLI.
+
+```bash
+python scripts/generate_docs_mermaid.py
+```
+
+The `solver_backend_hierarchy.mmd` diagram is generated via live class
+introspection (`SolverBackend.__subclasses__()`), so new backends appear
+automatically on regeneration.
+
+## Animations
+
+Nine animations (GIF + MP4 pairs) illustrate time-evolving phenomena — phase-
+field crack propagation, multi-pass thermal cycling, Goldak heat source sweep,
+active-learning convergence, Monte Carlo convergence, EnKF crack tracking,
+Bayesian posterior update, rainflow cycle counting, cyclic stress field.
+
+```bash
+python scripts/generate_docs_animations.py
+# or only a subset:
+python scripts/generate_docs_animations.py --only phase_field_crack_propagation
+```
+
+GIFs use palette quantization via pillow to stay under ~5 MB each. MP4s use
+H.264 via `imageio-ffmpeg`'s bundled ffmpeg binary (no system ffmpeg required).
+Every animation uses deterministic seeds; re-running the generator reproduces
+the asset byte-for-byte.
+
+## Master catalog
+
+All 40 advanced-concept assets (8 mermaid + 23 images + 9 animations) are
+indexed with descriptions and source references in
+[`docs/CONCEPTS.md`](CONCEPTS.md). To rebuild everything in one command:
+
+```bash
+python scripts/build_docs_assets.py
+```
+
+This runs the legacy script, the mermaid generator, the concept-images generator,
+and the animation generator in sequence and prints elapsed time per group.

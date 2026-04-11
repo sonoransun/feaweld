@@ -579,10 +579,13 @@ class TestGetBackend:
     def test_get_backend_auto_no_backends(self):
         """When no backends are available, should raise ImportError."""
         with patch.dict("sys.modules", {"dolfinx": None}):
-            # Also ensure CalculiX is not found
+            # Also ensure CalculiX and JAX fallback are not found
             with patch(
                 "feaweld.solver.calculix_backend.CalculiXBackend.__init__",
                 side_effect=ImportError("no ccx"),
+            ), patch(
+                "feaweld.solver.jax_backend.JAXBackend.__init__",
+                side_effect=ImportError("no jax"),
             ):
                 with pytest.raises(ImportError):
                     get_backend("auto")

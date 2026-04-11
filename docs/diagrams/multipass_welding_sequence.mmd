@@ -1,0 +1,20 @@
+sequenceDiagram
+    participant G as geometry.multipass
+    participant T as solver.thermal.MultiPassHeatSource
+    participant M as solver.mechanical
+    participant R as residual stress
+
+    G->>T: build_multipass_joint(base, sequence, path, profiles)
+    Note over G,T: root + fill + cap beads as physical groups
+    T->>T: Root pass t in [0, d1)<br/>Goldak source 1
+    T->>M: temperature field
+    M->>R: thermal stress + plasticity
+    T->>T: Interpass cooldown
+    T->>T: Fill pass t in [d1+gap, ...)<br/>Goldak source 2
+    T->>M: temperature field
+    M->>R: accumulate residual stress
+    T->>T: Cap pass<br/>Goldak source N
+    T->>M: temperature field
+    M->>R: final residual stress
+    R->>G: activate next bead (birth / death)
+    Note over G,R: Post-weld heat treatment simulate_pwht

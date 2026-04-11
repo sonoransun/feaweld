@@ -199,3 +199,57 @@ def combined_knockdown(
     for v in extra_factors.values():
         result *= v
     return result
+
+
+def defect_knockdown(
+    defects, base_fat: float, plate_thickness: float = 20.0
+) -> dict:
+    """Aggregate FAT downgrade across multiple defects in a weld.
+
+    Uses :func:`feaweld.defects.knockdown.defect_fat_downgrade` on each
+    defect and returns the minimum downgraded FAT (worst case) plus a
+    list of per-defect rationales.
+
+    Parameters
+    ----------
+    defects : Iterable
+        Iterable of concrete defect instances (e.g. ``PoreDefect``,
+        ``LackOfFusionDefect``).  An empty iterable is a no-op.
+    base_fat : float
+        Baseline FAT class (MPa) before any defect penalty.
+    plate_thickness : float, optional
+        Plate thickness (mm) forwarded to per-defect downgrade rules.
+
+    Returns
+    -------
+    dict
+        Keys ``worst_fat``, ``knockdown_factor``, and ``per_defect``.
+        The ``per_defect`` list contains ``{type, fat, rationale}`` dicts
+        in the original defect order.
+    """
+    from feaweld.defects.knockdown import defect_fat_downgrade
+
+    defect_list = list(defects)
+    if not defect_list:
+        return {
+            "worst_fat": base_fat,
+            "knockdown_factor": 1.0,
+            "per_defect": [],
+        }
+
+    results = [
+        defect_fat_downgrade(d, base_fat, plate_thickness) for d in defect_list
+    ]
+    worst = min(results, key=lambda r: r.downgraded_fat)
+    return {
+        "worst_fat": worst.downgraded_fat,
+        "knockdown_factor": worst.knockdown_factor,
+        "per_defect": [
+            {
+                "type": getattr(d, "defect_type", type(d).__name__),
+                "fat": r.downgraded_fat,
+                "rationale": r.rationale,
+            }
+            for d, r in zip(defect_list, results)
+        ],
+    }
