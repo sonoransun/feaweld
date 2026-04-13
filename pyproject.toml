@@ -66,6 +66,9 @@ neural = [
     "msgpack>=1.0",
 ]
 docs = [
+    "mkdocs>=1.6",
+    "mkdocs-material>=9.5",
+    "mkdocstrings[python]>=0.27",
     "matplotlib>=3.7",
     "imageio>=2.31",
     "imageio-ffmpeg>=0.4",
@@ -74,9 +77,27 @@ docs = [
 all = [
     "feaweld[fenics,calculix,viz,ml,digital-twin]",
 ]
+journal = [
+    "systemd-python>=235",
+]
+daemon = [
+    "watchdog>=3.0",
+    "systemd-python>=235",
+]
+distributed = [
+    "dask[distributed]>=2024.1",
+]
+export = [
+    "pyarrow>=14.0",
+]
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
+    "pytest-benchmark>=4.0",
+    "hypothesis>=6.0",
+    "ruff>=0.8",
+    "mypy>=1.13",
+    "pre-commit>=4.0",
 ]
 
 [project.scripts]
@@ -97,4 +118,92 @@ markers = [
     "requires_numpyro: tests requiring NumPyro",
     "slow: tests that take more than 10 seconds",
     "slow_gpu: GPU-intensive tests (opt-in)",
+    "benchmark: performance benchmark tests",
 ]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+src = ["src"]
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # pyflakes
+    "I",      # isort
+    "N",      # pep8-naming
+    "UP",     # pyupgrade
+    "B",      # flake8-bugbear
+    "A",      # flake8-builtins
+    "C4",     # flake8-comprehensions
+    "SIM",    # flake8-simplify
+    "C90",    # mccabe complexity
+    "RUF",    # ruff-specific rules
+]
+ignore = [
+    "E501",   # line too long (let formatter handle)
+    "N802",   # function name should be lowercase (FEA convention: E, nu, etc.)
+    "N803",   # argument name should be lowercase (same reason)
+    "N806",   # variable in function should be lowercase
+    "UP007",  # Use X | Y for union (keep Optional[] where it remains)
+]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 15
+
+[tool.ruff.lint.isort]
+known-first-party = ["feaweld"]
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/*" = ["ALL"]
+"tests/*" = ["B011", "SIM"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+check_untyped_defs = true
+no_implicit_optional = true
+strict_equality = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+show_error_codes = true
+namespace_packages = true
+explicit_package_bases = true
+
+[[tool.mypy.overrides]]
+module = [
+    "dolfinx.*",
+    "fenics_ufl.*",
+    "basix.*",
+    "pygccx.*",
+    "gmsh.*",
+    "pyvista.*",
+    "vtk.*",
+    "emcee.*",
+    "paho.*",
+    "asyncua.*",
+    "xgboost.*",
+    "flax.*",
+    "optax.*",
+    "jax.*",
+    "jaxlib.*",
+    "numpyro.*",
+    "msgpack.*",
+    "meshio.*",
+    "watchdog.*",
+    "systemd.*",
+    "dask.*",
+]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = [
+    "feaweld.solver.fenics_backend",
+    "feaweld.solver.calculix_backend",
+    "feaweld.digital_twin.*",
+    "feaweld.visualization.*",
+]
+disallow_untyped_defs = false

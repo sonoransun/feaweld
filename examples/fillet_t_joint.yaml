@@ -1,0 +1,75 @@
+# Fillet T-Joint Analysis Case
+# Basic fillet T-joint under axial loading with IIW fatigue assessment.
+#
+# Run with:
+#   feaweld run examples/fillet_t_joint.yaml
+#   feaweld validate examples/fillet_t_joint.yaml
+
+name: fillet_t_joint_example
+description: >
+  Standard fillet T-joint analysis: 20 mm base plate with 10 mm web,
+  8 mm fillet welds, subject to 50 kN axial load on the web.
+
+# --- Material definition ---
+# Material names reference YAML files in feaweld/data/materials/
+material:
+  base_metal: A36          # ASTM A36 structural steel
+  weld_metal: E70XX        # AWS E70XX filler metal
+  haz: A36                 # HAZ uses base metal properties (conservative)
+  temperature: 20.0        # Ambient temperature (C)
+
+# --- Joint geometry ---
+# All dimensions in mm (SI-mm convention throughout feaweld).
+geometry:
+  joint_type: fillet_t       # T-joint with fillet welds
+  base_width: 200.0          # Base plate width (mm)
+  base_thickness: 20.0       # Base plate thickness (mm)
+  web_height: 100.0          # Web (stiffener) height (mm)
+  web_thickness: 10.0        # Web thickness (mm)
+  weld_leg_size: 8.0         # Fillet weld leg size (mm)
+  length: 1.0                # Out-of-plane depth (mm), 1.0 for quasi-2D
+
+# --- Mesh parameters ---
+# Controls mesh refinement; weld_toe_size should be much finer than global_size.
+mesh:
+  global_size: 2.0           # Far-field element size (mm)
+  weld_toe_size: 0.2         # Element size at weld toe (mm) -- drives accuracy
+  element_order: 2           # Quadratic elements (2nd order)
+  element_type: tri          # Triangle elements ("tri" or "quad")
+
+# --- Solver settings ---
+solver:
+  solver_type: linear_elastic  # Linear elastic static analysis
+  backend: auto                # "auto" tries FEniCSx, then CalculiX, then JAX
+  nonlinear: false
+  max_iterations: 50
+  tolerance: 1.0e-8
+
+# --- Applied loading ---
+# Forces in N, moments in N-mm (SI-mm units).
+load:
+  axial_force: 50000.0        # 50 kN axial force on top node set
+  bending_moment: 0.0
+  shear_force: 0.0
+  pressure: 0.0
+  temperature_delta: 0.0
+
+# --- Post-processing ---
+postprocess:
+  stress_methods:
+    - hotspot_linear           # IIW Type A hot-spot stress extrapolation
+    - structural_dong          # Dong structural stress method
+  sn_curve: IIW_FAT90         # IIW FAT 90 S-N curve
+  fatigue_assessment: true     # Run Miner's rule fatigue life estimation
+  singularity_check: true      # Check for stress singularity at weld toe
+
+# --- Thermal (disabled for this case) ---
+thermal:
+  enabled: false
+
+# --- Probabilistic (disabled for this case) ---
+probabilistic:
+  enabled: false
+
+# --- Output ---
+output_dir: results/fillet_t_joint

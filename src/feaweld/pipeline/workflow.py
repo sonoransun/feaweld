@@ -17,9 +17,12 @@ from numpy.typing import NDArray
 
 from pydantic import BaseModel, Field
 
+from feaweld.core.logging import get_logger
 from feaweld.core.types import (
     JointType, SolverType, StressMethod, FEAResults, FEMesh, ElementType,
 )
+
+logger = get_logger(__name__)
 
 
 class MaterialConfig(BaseModel):
@@ -214,6 +217,7 @@ def run_analysis(case: AnalysisCase) -> WorkflowResult:
     Returns:
         WorkflowResult with all results.
     """
+    logger.info("Starting analysis: %s", case.name)
     result = WorkflowResult(case=case)
 
     # Step 0: Defect population (Track E/H) — runs outside the main
@@ -221,22 +225,29 @@ def run_analysis(case: AnalysisCase) -> WorkflowResult:
     # geometry/mesh/solver stages fail (e.g. missing Gmsh in sandbox).
     if case.defects.enabled:
         try:
+            logger.info("Stage: defect population")
             _apply_defect_population(result, case)
         except Exception as e:  # pragma: no cover - best-effort hook
             result.errors.append(f"Defect population: {e}")
 
     try:
         # Step 1: Materials
+        logger.info("Stage: materials")
         from feaweld.core.materials import load_material, MaterialSet
         base = load_material(case.material.base_metal)
         weld = load_material(case.material.weld_metal)
         haz = load_material(case.material.haz)
         mat_set = MaterialSet(base_metal=base, weld_metal=weld, haz=haz)
+        logger.debug("Materials loaded: base=%s weld=%s haz=%s",
+                      case.material.base_metal, case.material.weld_metal, case.material.haz)
 
         # Step 2: Geometry
+        logger.info("Stage: geometry (%s)", case.geometry.joint_type.value)
         joint = _build_geometry(case.geometry)
 
         # Step 3: Mesh
+        logger.info("Stage: mesh generation (global=%.2f, toe=%.2f)",
+                      case.mesh.global_size, case.mesh.weld_toe_size)
         from feaweld.mesh.generator import generate_mesh, WeldMeshConfig
         mesh_config = WeldMeshConfig(
             global_size=case.mesh.global_size,
@@ -246,8 +257,11 @@ def run_analysis(case: AnalysisCase) -> WorkflowResult:
         )
         mesh = generate_mesh(joint, mesh_config)
         result.mesh = mesh
+        logger.debug("Mesh: %d nodes, %d elements", mesh.n_nodes, mesh.n_elements)
 
         # Step 4: Solver
+        logger.info("Stage: solver (backend=%s, thermal=%s)",
+                      case.solver.backend, case.thermal.enabled)
         from feaweld.solver.backend import get_backend
         from feaweld.core.types import LoadCase, BoundaryCondition, LoadType
         backend = get_backend(case.solver.backend)
@@ -275,10 +289,12 @@ def run_analysis(case: AnalysisCase) -> WorkflowResult:
             )
 
         result.fea_results = fea_results
+        logger.info("Solver complete")
 
         # Step 4b: Multi-pass sequence metadata (Track G/H).
         if case.multipass.enabled:
             try:
+                logger.info("Stage: multi-pass metadata")
                 _apply_multipass_metadata(result, case)
             except Exception as e:  # pragma: no cover - best-effort hook
                 result.errors.append(f"Multi-pass metadata: {e}")
@@ -287,6 +303,7 @@ def run_analysis(case: AnalysisCase) -> WorkflowResult:
         if fea_results.stress is not None:
             for method in case.postprocess.stress_methods:
                 try:
+                    logger.info("Stage: post-processing (%s)", method.value)
                     pp_result = _run_postprocess(method, fea_results, mesh, case)
                     result.postprocess_results[method.value] = pp_result
                 except Exception as e:
@@ -295,6 +312,8 @@ def run_analysis(case: AnalysisCase) -> WorkflowResult:
         # Step 5b: Multi-axial fatigue criterion (Track F/H).
         if case.postprocess.multiaxial_criterion != "none":
             try:
+                logger.info("Stage: multi-axial fatigue (%s)",
+                             case.postprocess.multiaxial_criterion)
                 _apply_multiaxial_criterion(result, case)
             except Exception as e:
                 result.errors.append(f"Multi-axial fatigue: {e}")
@@ -302,6 +321,7 @@ def run_analysis(case: AnalysisCase) -> WorkflowResult:
         # Step 6: Fatigue
         if case.postprocess.fatigue_assessment and result.postprocess_results:
             try:
+                logger.info("Stage: fatigue assessment")
                 fatigue = _run_fatigue_assessment(result.postprocess_results, case)
                 result.fatigue_results = fatigue
             except Exception as e:
@@ -316,6 +336,7 @@ def run_analysis(case: AnalysisCase) -> WorkflowResult:
         # Step 6b: Optional J-integral / K-factor evaluation (Track F/H).
         if case.postprocess.compute_k_factors:
             try:
+                logger.info("Stage: J-integral / K-factor")
                 _apply_j_integral(result, case)
             except Exception as e:
                 result.errors.append(f"J-integral: {e}")
@@ -323,6 +344,8 @@ def run_analysis(case: AnalysisCase) -> WorkflowResult:
         # Step 7: Probabilistic
         if case.probabilistic.enabled:
             try:
+                logger.info("Stage: probabilistic (n=%d, method=%s)",
+                             case.probabilistic.n_samples, case.probabilistic.method)
                 prob = _run_probabilistic(case, mat_set)
                 result.probabilistic_results = prob
             except Exception as e:
@@ -330,6 +353,11 @@ def run_analysis(case: AnalysisCase) -> WorkflowResult:
 
     except Exception as e:
         result.errors.append(f"Workflow error: {e}")
+
+    if result.errors:
+        logger.warning("Analysis %s completed with %d error(s)", case.name, len(result.errors))
+    else:
+        logger.info("Analysis %s completed successfully", case.name)
 
     return result
 

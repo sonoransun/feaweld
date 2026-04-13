@@ -450,6 +450,15 @@ class CalculiXBackend(SolverBackend):
     ) -> None:
         self._ccx_path = ccx_path
         self._work_dir = Path(work_dir) if work_dir else None
+        # Honour FEAWELD_TMPDIR for scratch files (e.g. tmpfs mount).
+        self._tmpdir: str | None = os.environ.get("FEAWELD_TMPDIR")
+
+    def _scratch_dir(self) -> Path:
+        """Return a fresh temporary directory for .inp / .frd files."""
+        if self._work_dir:
+            return self._work_dir
+        base = self._tmpdir or tempfile.gettempdir()
+        return Path(tempfile.mkdtemp(prefix="feaweld_ccx_", dir=base))
 
     def _get_ccx(self) -> str:
         if self._ccx_path is not None:
@@ -497,7 +506,7 @@ class CalculiXBackend(SolverBackend):
         temperature: float = 20.0,
     ) -> FEAResults:
         """Static mechanical solve using CalculiX."""
-        work = self._work_dir or Path(tempfile.mkdtemp(prefix="feaweld_ccx_"))
+        work = self._scratch_dir()
         inp_path = work / "model.inp"
 
         generate_inp(
@@ -538,7 +547,7 @@ class CalculiXBackend(SolverBackend):
         load_case: LoadCase,
     ) -> FEAResults:
         """Steady-state thermal solve using CalculiX."""
-        work = self._work_dir or Path(tempfile.mkdtemp(prefix="feaweld_ccx_"))
+        work = self._scratch_dir()
         inp_path = work / "thermal_steady.inp"
 
         generate_inp(
@@ -583,7 +592,7 @@ class CalculiXBackend(SolverBackend):
         backend.
         """
         time_steps = np.asarray(time_steps, dtype=np.float64)
-        work = self._work_dir or Path(tempfile.mkdtemp(prefix="feaweld_ccx_"))
+        work = self._scratch_dir()
         inp_path = work / "thermal_transient.inp"
 
         generate_inp(

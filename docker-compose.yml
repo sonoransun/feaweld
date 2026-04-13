@@ -1,0 +1,31 @@
+services:
+  feaweld:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: prod
+    volumes:
+      - ./examples:/app/examples
+      - ./results:/app/results
+    environment:
+      FEAWELD_TMPDIR: /dev/shm/feaweld
+
+  mqtt:
+    image: eclipse-mosquitto:2
+    ports:
+      - "1883:1883"
+    command: mosquitto -c /mosquitto-no-auth.conf
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    profiles:
+      - monitoring
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    profiles:
+      - monitoring

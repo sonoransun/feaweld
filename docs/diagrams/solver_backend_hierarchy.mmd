@@ -14,8 +14,6 @@ classDiagram
     SolverBackend <|-- JAXBackend
     class NeuralBackend
     SolverBackend <|-- NeuralBackend
-    class _FakeAnalyticBackend
-    SolverBackend <|-- _FakeAnalyticBackend
     class JAXConstitutiveModel {
         <<protocol>>
         +stress(strain)

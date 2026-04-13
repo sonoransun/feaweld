@@ -1,0 +1,53 @@
+site_name: feaweld
+site_description: Finite Element Analysis for weld joint stress, fatigue, and structural integrity
+repo_url: https://github.com/feaweld/feaweld
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.expand
+    - content.code.copy
+  palette:
+    primary: indigo
+    accent: blue
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [src]
+          options:
+            show_source: true
+            show_root_heading: true
+            heading_level: 2
+
+markdown_extensions:
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - admonition
+  - pymdownx.details
+  - pymdownx.highlight
+  - pymdownx.inlinehilite
+
+nav:
+  - Home: index.md
+  - Getting Started: getting-started.md
+  - Concepts: CONCEPTS.md
+  - Orchestration: orchestration.md
+  - Deployment: deployment.md
+  - CLI Reference: cli-reference.md
+  - Visualization: VISUALIZATION_GUIDE.md
+  - API Reference:
+    - api/index.md
+    - Core Types: api/core-types.md
+    - Materials: api/materials.md
+    - Pipeline: api/pipeline.md
+    - Solver Backends: api/solver.md
+    - Post-Processing: api/postprocess.md
+    - Fatigue: api/fatigue.md
+  - Changelog: changelog.md

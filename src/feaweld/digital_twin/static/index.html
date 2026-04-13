@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>feaweld Digital Twin Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+         background: #1a1a2e; color: #e0e0e0; }
+  .header { background: #16213e; padding: 1rem 2rem; display: flex;
+            justify-content: space-between; align-items: center; }
+  .header h1 { font-size: 1.4rem; color: #4fc3f7; }
+  .status { padding: 0.3rem 0.8rem; border-radius: 4px; font-size: 0.85rem; }
+  .status.connected { background: #2e7d32; }
+  .status.disconnected { background: #c62828; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+          gap: 1rem; padding: 1rem; }
+  .card { background: #16213e; border-radius: 8px; padding: 1rem; }
+  .card h2 { font-size: 1rem; color: #90caf9; margin-bottom: 0.8rem;
+             border-bottom: 1px solid #2a3a5c; padding-bottom: 0.4rem; }
+  .metric { display: flex; justify-content: space-between; padding: 0.3rem 0;
+            font-size: 0.9rem; }
+  .metric .value { color: #4fc3f7; font-weight: bold; }
+  .alerts { max-height: 200px; overflow-y: auto; }
+  .alert-item { padding: 0.4rem; margin: 0.2rem 0; border-radius: 4px; font-size: 0.82rem; }
+  .alert-item.warning { background: #4a3800; border-left: 3px solid #ffc107; }
+  .alert-item.critical { background: #4a0000; border-left: 3px solid #f44336; }
+  canvas { max-height: 250px; }
+  #log { font-family: monospace; font-size: 0.78rem; max-height: 180px;
+         overflow-y: auto; background: #0d1117; padding: 0.5rem; border-radius: 4px; }
+  #log div { padding: 0.1rem 0; border-bottom: 1px solid #1a2332; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>feaweld Digital Twin</h1>
+  <span id="conn-status" class="status disconnected">Disconnected</span>
+</div>
+
+<div class="grid">
+  <!-- Sensor Data -->
+  <div class="card">
+    <h2>Sensor Data</h2>
+    <canvas id="sensorChart"></canvas>
+  </div>
+
+  <!-- Crack Growth -->
+  <div class="card">
+    <h2>Crack Growth Monitor</h2>
+    <canvas id="crackChart"></canvas>
+    <div style="margin-top: 0.5rem;">
+      <div class="metric"><span>Crack length</span><span class="value" id="crack-len">--</span></div>
+      <div class="metric"><span>Remaining life</span><span class="value" id="remain-life">--</span></div>
+    </div>
+  </div>
+
+  <!-- State Machine -->
+  <div class="card">
+    <h2>Lifecycle State</h2>
+    <div class="metric"><span>Current state</span><span class="value" id="lifecycle-state">IDLE</span></div>
+    <div class="metric"><span>Uptime</span><span class="value" id="uptime">--</span></div>
+    <div class="metric"><span>Updates received</span><span class="value" id="update-count">0</span></div>
+  </div>
+
+  <!-- Alerts -->
+  <div class="card">
+    <h2>Alerts</h2>
+    <div id="alerts" class="alerts">
+      <div style="color: #666; font-style: italic;">No alerts</div>
+    </div>
+  </div>
+
+  <!-- Predictions -->
+  <div class="card">
+    <h2>Model Predictions</h2>
+    <div class="metric"><span>Mean yield (MPa)</span><span class="value" id="pred-yield">--</span></div>
+    <div class="metric"><span>Damage parameter</span><span class="value" id="pred-damage">--</span></div>
+    <div class="metric"><span>Safety factor</span><span class="value" id="pred-sf">--</span></div>
+  </div>
+
+  <!-- Event Log -->
+  <div class="card">
+    <h2>Event Log</h2>
+    <div id="log"></div>
+  </div>
+</div>
+
+<script>
+const WS_URL = `ws://${location.hostname || 'localhost'}:8765`;
+let ws = null;
+let updateCount = 0;
+const startTime = Date.now();
+
+// --- Charts ---
+const sensorCtx = document.getElementById('sensorChart').getContext('2d');
+const sensorChart = new Chart(sensorCtx, {
+  type: 'line',
+  data: { labels: [], datasets: [{
+    label: 'Sensor Value', data: [], borderColor: '#4fc3f7',
+    backgroundColor: 'rgba(79,195,247,0.1)', fill: true, tension: 0.3, pointRadius: 0
+  }]},
+  options: { responsive: true, scales: {
+    x: { display: true, ticks: { color: '#666' } },
+    y: { ticks: { color: '#888' } }
+  }, plugins: { legend: { labels: { color: '#aaa' } } } }
+});
+
+const crackCtx = document.getElementById('crackChart').getContext('2d');
+const crackChart = new Chart(crackCtx, {
+  type: 'line',
+  data: { labels: [], datasets: [{
+    label: 'Crack (mm)', data: [], borderColor: '#ff7043',
+    backgroundColor: 'rgba(255,112,67,0.1)', fill: true, tension: 0.3, pointRadius: 2
+  }]},
+  options: { responsive: true, scales: {
+    x: { display: true, ticks: { color: '#666' } },
+    y: { ticks: { color: '#888' } }
+  }, plugins: { legend: { labels: { color: '#aaa' } } } }
+});
+
+function addLog(msg) {
+  const el = document.getElementById('log');
+  const d = document.createElement('div');
+  const t = new Date().toLocaleTimeString();
+  d.textContent = `[${t}] ${msg}`;
+  el.prepend(d);
+  while (el.children.length > 100) el.removeChild(el.lastChild);
+}
+
+function connect() {
+  ws = new WebSocket(WS_URL);
+  ws.onopen = () => {
+    document.getElementById('conn-status').className = 'status connected';
+    document.getElementById('conn-status').textContent = 'Connected';
+    addLog('WebSocket connected');
+    ws.send(JSON.stringify({ command: 'get_state' }));
+  };
+  ws.onclose = () => {
+    document.getElementById('conn-status').className = 'status disconnected';
+    document.getElementById('conn-status').textContent = 'Disconnected';
+    addLog('WebSocket disconnected, reconnecting...');
+    setTimeout(connect, 3000);
+  };
+  ws.onerror = () => { addLog('WebSocket error'); };
+  ws.onmessage = (event) => {
+    try { handleMessage(JSON.parse(event.data)); }
+    catch (e) { addLog('Parse error: ' + e.message); }
+  };
+}
+
+function handleMessage(msg) {
+  updateCount++;
+  document.getElementById('update-count').textContent = updateCount;
+  const elapsed = Math.floor((Date.now() - startTime) / 1000);
+  document.getElementById('uptime').textContent = `${Math.floor(elapsed/60)}m ${elapsed%60}s`;
+
+  if (msg.type === 'sensor_data') {
+    const t = new Date(msg.timestamp * 1000).toLocaleTimeString();
+    sensorChart.data.labels.push(t);
+    sensorChart.data.datasets[0].data.push(msg.value);
+    if (sensorChart.data.labels.length > 100) {
+      sensorChart.data.labels.shift();
+      sensorChart.data.datasets[0].data.shift();
+    }
+    sensorChart.update('none');
+  }
+  else if (msg.type === 'prediction') {
+    if (msg.crack_mean_mm !== undefined) {
+      crackChart.data.labels.push(msg.total_cycles || '');
+      crackChart.data.datasets[0].data.push(msg.crack_mean_mm);
+      if (crackChart.data.labels.length > 50) {
+        crackChart.data.labels.shift();
+        crackChart.data.datasets[0].data.shift();
+      }
+      crackChart.update('none');
+      document.getElementById('crack-len').textContent = msg.crack_mean_mm.toFixed(3) + ' mm';
+      const rl = msg.remaining_life_cycles;
+      document.getElementById('remain-life').textContent =
+        isFinite(rl) ? Math.round(rl).toLocaleString() + ' cycles' : 'inf';
+    }
+    if (msg.yield_strength) document.getElementById('pred-yield').textContent = msg.yield_strength.toFixed(0);
+    if (msg.damage_parameter) document.getElementById('pred-damage').textContent = msg.damage_parameter.toFixed(4);
+    if (msg.safety_factor) document.getElementById('pred-sf').textContent = msg.safety_factor.toFixed(2);
+  }
+  else if (msg.type === 'alert') {
+    const el = document.getElementById('alerts');
+    if (el.querySelector('[style]')) el.innerHTML = '';
+    const d = document.createElement('div');
+    d.className = 'alert-item ' + (msg.severity || 'warning');
+    d.textContent = `[${msg.severity}] ${msg.message}`;
+    el.prepend(d);
+    addLog(`ALERT: ${msg.message}`);
+  }
+  else if (msg.type === 'state') {
+    document.getElementById('lifecycle-state').textContent = msg.state || 'UNKNOWN';
+  }
+}
+
+connect();
+</script>
+</body>
+</html>

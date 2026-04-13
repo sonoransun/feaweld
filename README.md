@@ -93,10 +93,26 @@ The Lazzarin SED method averages strain energy density over a control volume at 
   <img src="docs/images/sed_concept.svg" alt="SED control volume" width="60%">
 </p>
 
+### Pipeline Architecture
+
+The analysis pipeline is modeled as a DAG. Independent stages execute concurrently, and each batch boundary is a checkpoint save point for crash recovery.
+
+```mermaid
+flowchart LR
+    YAML["YAML Case"] --> MAT["Materials"] & DEF["Defects"]
+    MAT --> GEO["Geometry"]
+    GEO --> MESH["Mesh"]
+    MESH --> SOLVE["Solver"]
+    SOLVE --> HS["Hotspot"] & DG["Dong"] & LN["Linearization"] & SD["SED"]
+    HS & DG & LN & SD --> FAT["Fatigue"]
+    FAT --> PROB["Probabilistic"]
+    PROB --> RPT["Report"]
+```
+
 ## Key Capabilities
 
 **Structural Analysis**
-- Dual FEA solver backend: FEniCSx (nonlinear thermomechanical) and CalculiX (standard linear/thermal)
+- Four FEA solver backends: FEniCSx (nonlinear thermomechanical), CalculiX (standard linear/thermal), JAX (differentiable), and Neural (surrogate)
 - Five parametric joint types: fillet T-joint, butt weld, lap joint, corner joint, cruciform
 - Goldak double-ellipsoid heat source for welding simulation with element birth-death
 - J2 elastoplastic constitutive model with radial return mapping
@@ -104,6 +120,7 @@ The Lazzarin SED method averages strain energy density over a control volume at 
 
 **Fatigue Assessment**
 - Eight post-processing methods: nominal (ASME VIII), hot-spot (IIW Type A/B), Battelle/Dong mesh-insensitive structural stress, effective notch stress (FAT225), strain energy density (Lazzarin), through-thickness linearization, Blodgett hand calculations
+- Six multi-axial fatigue criteria: Findley, Dang Van, Sines, Crossland, Fatemi-Socie, McDiarmid
 - S-N curves: 14 IIW FAT classes, 17 DNV-RP-C203 categories, ASME VIII ferritic/austenitic
 - Rainflow cycle counting (ASTM E1049), Palmgren-Miner cumulative damage, Goodman/Gerber mean stress correction
 - Fatigue knockdown factors for surface finish, size, environment
@@ -115,9 +132,33 @@ The Lazzarin SED method averages strain energy density over a control volume at 
 - HTML reports with embedded base64 figures
 
 **Parametric Studies**
-- Concurrent multi-case execution via ProcessPoolExecutor
+- Concurrent multi-case execution with spawn-safe `ProcessPoolExecutor`
 - Parameter sweeps (grid or one-at-a-time) over loads, materials, mesh refinement
+- Distributed scaling to Dask or Ray clusters for multi-node studies
 - Automated comparison reports with metric tables, delta computation, sensitivity plots
+
+**Pipeline & Orchestration**
+- DAG-based pipeline execution with concurrent post-processing stage batches
+- Pipeline hooks for pre/post stage callbacks, timing, and memory profiling
+- Checkpoint/restart for crash recovery of long-running analyses
+- SQLite-backed job queue with priority scheduling and worker loop
+- Shared-memory IPC for zero-copy numpy array transfer between study workers
+- Graceful SIGTERM/SIGINT shutdown with partial result serialization
+
+**Deployment & Operations**
+- Docker multi-stage builds and docker-compose stack (feaweld + MQTT broker + optional Grafana/Prometheus)
+- systemd service unit for digital twin daemon with watchdog, cgroups limits, and security hardening
+- Structured logging: console text, JSON lines (containers), systemd journal
+- Resource monitoring via /proc integration and RLIMIT subprocess enforcement
+- Memory-mapped arrays for models that exceed available RAM
+- File watching (inotify) for hot-reload of case YAML files and material databases
+
+**Developer Tooling**
+- Pre-commit hooks (ruff linting + formatting, mypy type checking)
+- GitHub Actions CI with test matrix (Python 3.10-3.12, optional dep profiles)
+- Property-based tests (Hypothesis), benchmark suite (pytest-benchmark)
+- Makefile for common tasks: `make test`, `make lint`, `make typecheck`, `make docs`
+- mkdocs-based API documentation with mkdocstrings
 
 **Reference Data**
 - 49 materials with temperature-dependent properties (carbon steel, stainless, high-strength, pipeline, aluminum, filler metals)
@@ -129,6 +170,43 @@ The Lazzarin SED method averages strain energy density over a control volume at 
 - 82 AWS A5 filler metal classifications with base metal matching
 - 25 weld joint efficiency factors (ASME, AWS, EN)
 
+## CLI Overview
+
+```mermaid
+mindmap
+  root((feaweld))
+    Analysis
+      run
+      validate
+      profile
+    Stress Methods
+      blodgett
+      j-integral
+    Visualization
+      visualize
+      dashboard
+    Mesh
+      mesh generate
+      mesh inspect
+    Studies
+      study run
+      study compare
+      convergence
+      sensitivity
+    Data
+      materials
+      groove-types
+      defects list
+    Export
+      export
+    Digital Twin
+      twin start
+      twin status
+    Job Queue
+      queue submit
+      queue status
+```
+
 ## Quick Start
 
 ```bash
@@ -136,17 +214,40 @@ The Lazzarin SED method averages strain energy density over a control volume at 
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[viz]"    # core + matplotlib + pyvista
 
+# Validate a case file
+feaweld validate examples/fillet_t_joint.yaml
+
 # Run an analysis from YAML
 feaweld run examples/fillet_t_joint.yaml
 
 # Blodgett hand calculation
 feaweld blodgett -g box --d 100 --b 50 -t 5 -P 50000
 
-# List available materials
-feaweld materials
+# Generate and inspect mesh without solving
+feaweld mesh generate examples/fillet_t_joint.yaml -o mesh.vtk
+feaweld mesh inspect mesh.vtk
 
 # Run a parametric study
 feaweld study run study.yaml -j 4
+
+# Mesh convergence study
+feaweld convergence examples/fillet_t_joint.yaml -n 4
+
+# Single-parameter sensitivity sweep
+feaweld sensitivity examples/fillet_t_joint.yaml --param load.axial_force --range 10000:50000:5
+
+# Export results to CSV
+feaweld export results/stress.vtk --format csv
+
+# Profile per-stage timing
+feaweld profile examples/fillet_t_joint.yaml
+
+# Submit to job queue
+feaweld queue submit examples/fillet_t_joint.yaml -p 1
+feaweld queue status
+
+# Start digital twin daemon
+feaweld twin start --host mqtt.local
 ```
 
 **Programmatic usage:**
@@ -254,10 +355,34 @@ covering every advanced feature.
 | AWS D1.1 | Weld joint efficiency factors, filler metal matching |
 | Lazzarin (2001) | Strain energy density method with control volume |
 
+## Deployment
+
+feaweld supports containerised deployment with Docker and production monitoring via systemd. See the [deployment guide](docs/deployment.md) for full details.
+
+```mermaid
+flowchart TB
+    subgraph compose["docker-compose"]
+        FW["feaweld"] -->|MQTT| MQ["Mosquitto :1883"]
+        FW --> VOL[("results/")]
+    end
+    subgraph systemd
+        SVC["feaweld-twin.service"] --> TWIN["daemon"]
+        SVC --> JRNL["journald"]
+    end
+    MQ --> TWIN
+    SENSOR["Sensors"] --> MQ
+    TWIN --> WS["WebSocket Dashboard"]
+
+    subgraph monitoring["optional"]
+        PROM["Prometheus"] --> GRAF["Grafana :3000"]
+    end
+    TWIN --> PROM
+```
+
 ## Project Metrics
 
-- 64 source modules, ~17,700 lines of code
-- 332 passing tests across 18 test modules
+- 110+ source modules, ~30,000 lines of code
+- 506 passing tests across 60 test modules
 - 49 material databases (7 categories) with temperature-dependent properties
 - 6 JSON reference datasets (SCF, CCT, S-N details, residual stress, filler metals, weld efficiency)
-- 5 joint geometry types, 2 solver backends, 8 post-processing methods
+- 5 joint geometry types, 4 solver backends, 8+ post-processing methods, 6 multi-axial criteria

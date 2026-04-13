@@ -1,0 +1,72 @@
+# Butt Weld Fatigue Assessment
+# Full-penetration butt weld under cyclic axial loading.
+#
+# Run with:
+#   feaweld run examples/butt_weld_fatigue.yaml
+#   feaweld validate examples/butt_weld_fatigue.yaml
+
+name: butt_weld_fatigue
+description: >
+  Full-penetration butt weld in 15 mm plate. Evaluates fatigue life
+  under 30 kN cyclic axial loading using IIW FAT 90 S-N curve.
+
+# --- Material definition ---
+material:
+  base_metal: A36
+  weld_metal: E70XX
+  haz: A36
+  temperature: 20.0           # Ambient temperature (C)
+
+# --- Joint geometry ---
+geometry:
+  joint_type: butt             # Full-penetration butt weld
+  base_width: 150.0            # Plate width (mm)
+  base_thickness: 15.0         # Plate thickness (mm)
+  web_height: 0.0              # Not used for butt welds
+  web_thickness: 0.0           # Not used for butt welds
+  weld_leg_size: 0.0           # Not applicable for butt welds
+  length: 1.0                  # Out-of-plane depth (mm)
+
+# --- Mesh parameters ---
+mesh:
+  global_size: 2.0
+  weld_toe_size: 0.15          # Fine mesh at weld cap toe
+  element_order: 2
+  element_type: tri
+
+# --- Solver settings ---
+solver:
+  solver_type: linear_elastic
+  backend: auto
+  nonlinear: false
+
+# --- Applied loading ---
+# Cyclic axial force representing 30 kN range.
+load:
+  axial_force: 30000.0         # 30 kN axial force (N)
+  bending_moment: 0.0
+  shear_force: 0.0
+  pressure: 0.0
+  temperature_delta: 0.0
+
+# --- Post-processing ---
+# Multiple stress methods for comparison; Blodgett adds a hand-calc check.
+postprocess:
+  stress_methods:
+    - hotspot_linear
+    - structural_dong
+    - blodgett
+  sn_curve: IIW_FAT90
+  fatigue_assessment: true
+  singularity_check: true
+
+# --- Thermal (disabled) ---
+thermal:
+  enabled: false
+
+# --- Probabilistic (disabled) ---
+probabilistic:
+  enabled: false
+
+# --- Output ---
+output_dir: results/butt_weld_fatigue
