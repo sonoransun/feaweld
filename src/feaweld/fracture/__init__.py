@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 from feaweld.fracture.types import FractureResult
-from feaweld.fracture.phase_field import PhaseFieldConfig, solve_phase_field
+from feaweld.fracture.phase_field import (
+    EnergyDecomposition,
+    PhaseFieldConfig,
+    solve_phase_field,
+)
 from feaweld.fracture.j_integral import (
     JResult,
     compute_k_from_j_elastic,
@@ -17,6 +21,7 @@ from feaweld.fracture.ctod import (
 )
 
 __all__ = [
+    "EnergyDecomposition",
     "FractureResult",
     "PhaseFieldConfig",
     "solve_phase_field",

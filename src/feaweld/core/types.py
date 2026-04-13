@@ -388,6 +388,7 @@ class SolverType(str, Enum):
     THERMAL_STEADY = "thermal_steady"
     THERMAL_TRANSIENT = "thermal_transient"
     THERMOMECHANICAL = "thermomechanical"
+    MULTIPASS_THERMAL = "multipass_thermal"
     CREEP = "creep"
 
 

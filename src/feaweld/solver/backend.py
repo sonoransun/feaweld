@@ -78,6 +78,7 @@ class SolverBackend(ABC):
         load_case: LoadCase,
         time_steps: NDArray,
         heat_source: object | None = None,
+        initial_temperature: NDArray | None = None,
     ) -> FEAResults:
         """Transient thermal analysis.
 
@@ -93,6 +94,9 @@ class SolverBackend(ABC):
             Array of time values (s) at which to solve.
         heat_source : object or None
             Optional moving heat source (e.g. GoldakHeatSource).
+        initial_temperature : NDArray or None
+            Optional ``(n_nodes,)`` initial temperature field.  If *None*,
+            a uniform 20 C ambient is assumed.
 
         Returns
         -------

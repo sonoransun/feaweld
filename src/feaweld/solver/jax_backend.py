@@ -978,6 +978,7 @@ class JAXBackend(SolverBackend):
         load_case: LoadCase,
         time_steps: NDArray,
         heat_source: object | None = None,
+        initial_temperature: NDArray | None = None,
     ) -> FEAResults:
         """Transient thermal solve via backward Euler time stepping.
 

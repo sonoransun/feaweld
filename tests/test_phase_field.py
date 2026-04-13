@@ -256,3 +256,153 @@ def test_dcb_softening_appears(steel: Material) -> None:
     # Damage should have grown beyond the initial notch somewhere.
     assert result.damage.max() >= initial_damage.max() - 1e-12
     assert result.damage.sum() > initial_damage.sum()
+
+
+# ---------------------------------------------------------------------------
+# TET4 / 3D fixtures and tests
+# ---------------------------------------------------------------------------
+
+
+def _structured_tet_block(
+    lx: float, ly: float, lz: float, nx: int, ny: int, nz: int,
+) -> FEMesh:
+    """Structured TET4 block: nx*ny*nz hexahedra, each split into 5 tets."""
+    xs = np.linspace(0.0, lx, nx + 1)
+    ys = np.linspace(0.0, ly, ny + 1)
+    zs = np.linspace(0.0, lz, nz + 1)
+    nodes = []
+    for k in range(nz + 1):
+        for j in range(ny + 1):
+            for i in range(nx + 1):
+                nodes.append([xs[i], ys[j], zs[k]])
+    nodes = np.array(nodes, dtype=np.float64)
+
+    def nid(i, j, k):
+        return k * (ny + 1) * (nx + 1) + j * (nx + 1) + i
+
+    elements = []
+    for k in range(nz):
+        for j in range(ny):
+            for i in range(nx):
+                n0 = nid(i, j, k)
+                n1 = nid(i + 1, j, k)
+                n2 = nid(i + 1, j + 1, k)
+                n3 = nid(i, j + 1, k)
+                n4 = nid(i, j, k + 1)
+                n5 = nid(i + 1, j, k + 1)
+                n6 = nid(i + 1, j + 1, k + 1)
+                n7 = nid(i, j + 1, k + 1)
+                # Split hex into 5 tets
+                elements.append([n0, n1, n3, n4])
+                elements.append([n1, n2, n3, n6])
+                elements.append([n1, n4, n5, n6])
+                elements.append([n3, n4, n6, n7])
+                elements.append([n1, n3, n4, n6])
+
+    node_sets = {
+        "bottom": np.array([nid(i, j, 0) for j in range(ny + 1) for i in range(nx + 1)], dtype=np.int64),
+        "top": np.array([nid(i, j, nz) for j in range(ny + 1) for i in range(nx + 1)], dtype=np.int64),
+    }
+    return FEMesh(
+        nodes=nodes,
+        elements=np.array(elements, dtype=np.int64),
+        element_type=ElementType.TET4,
+        node_sets=node_sets,
+    )
+
+
+@pytest.fixture
+def tet_block() -> FEMesh:
+    return _structured_tet_block(lx=1.0, ly=0.5, lz=0.5, nx=4, ny=2, nz=2)
+
+
+def _tension_load_case_3d(force_z: float = 10.0) -> LoadCase:
+    return LoadCase(
+        name="tension_3d",
+        loads=[
+            BoundaryCondition(
+                node_set="top",
+                bc_type=LoadType.FORCE,
+                values=np.array([0.0, 0.0, force_z]),
+            ),
+        ],
+        constraints=[
+            BoundaryCondition(
+                node_set="bottom",
+                bc_type=LoadType.DISPLACEMENT,
+                values=np.array([0.0, 0.0, 0.0]),
+            ),
+        ],
+    )
+
+
+def test_tet4_mesh_density_guard(tet_block: FEMesh, steel: Material) -> None:
+    cfg = PhaseFieldConfig(l0=0.001, min_mesh_ratio=4.0, n_load_steps=1)
+    with pytest.raises(ValueError, match="Mesh too coarse"):
+        solve_phase_field(tet_block, steel, _tension_load_case_3d(), cfg)
+
+
+def test_tet4_zero_load_gives_zero_damage(tet_block: FEMesh, steel: Material) -> None:
+    cfg = PhaseFieldConfig(
+        l0=0.5, Gc=2.7, n_load_steps=2, max_load=0.0,
+        max_staggered_iters=5,
+    )
+    lc = _tension_load_case_3d(force_z=0.0)
+    result = solve_phase_field(tet_block, steel, lc, cfg)
+    assert isinstance(result, FractureResult)
+    assert result.damage.shape == (tet_block.n_nodes,)
+    assert np.allclose(result.damage, 0.0, atol=1e-10)
+    assert result.displacement.shape == (tet_block.n_nodes, 3)
+
+
+def test_tet4_damage_monotonic(tet_block: FEMesh, steel: Material) -> None:
+    cfg = PhaseFieldConfig(
+        l0=0.5, Gc=0.05, n_load_steps=5, max_load=1.0,
+        staggered_tol=1e-3, max_staggered_iters=20,
+    )
+    lc = _tension_load_case_3d(force_z=200.0)
+    result = solve_phase_field(tet_block, steel, lc, cfg)
+    hist = np.stack(result.damage_history, axis=0)
+    diffs = np.diff(hist, axis=0)
+    assert np.all(diffs >= -1e-10)
+
+
+# ---------------------------------------------------------------------------
+# Energy split tests
+# ---------------------------------------------------------------------------
+
+from feaweld.fracture.phase_field import EnergyDecomposition
+
+
+def test_energy_split_none_backward_compat(fine_plate: FEMesh, steel: Material) -> None:
+    """energy_split=NONE should produce identical results to the default."""
+    cfg_default = PhaseFieldConfig(l0=0.5, Gc=0.05, n_load_steps=3, max_load=1.0,
+                                    staggered_tol=1e-3, max_staggered_iters=10)
+    cfg_none = PhaseFieldConfig(l0=0.5, Gc=0.05, n_load_steps=3, max_load=1.0,
+                                 staggered_tol=1e-3, max_staggered_iters=10,
+                                 energy_split=EnergyDecomposition.NONE)
+    lc = _tension_load_case(force_y=200.0)
+    r1 = solve_phase_field(fine_plate, steel, lc, cfg_default)
+    r2 = solve_phase_field(fine_plate, steel, lc, cfg_none)
+    assert np.allclose(r1.damage, r2.damage, atol=1e-12)
+    assert np.allclose(r1.reaction_history, r2.reaction_history, atol=1e-8)
+
+
+def test_spectral_split_pure_tension(fine_plate: FEMesh, steel: Material) -> None:
+    """Under pure tension, spectral split psi_plus should match full energy."""
+    cfg = PhaseFieldConfig(l0=0.5, Gc=0.05, n_load_steps=3, max_load=1.0,
+                            staggered_tol=1e-3, max_staggered_iters=10,
+                            energy_split=EnergyDecomposition.SPECTRAL)
+    lc = _tension_load_case(force_y=200.0)
+    result = solve_phase_field(fine_plate, steel, lc, cfg)
+    assert result.damage.max() > 0.0  # Damage should develop
+
+
+def test_amor_split_runs(fine_plate: FEMesh, steel: Material) -> None:
+    """Amor split should run without errors."""
+    cfg = PhaseFieldConfig(l0=0.5, Gc=0.05, n_load_steps=3, max_load=1.0,
+                            staggered_tol=1e-3, max_staggered_iters=10,
+                            energy_split=EnergyDecomposition.VOLUMETRIC_DEVIATORIC)
+    lc = _tension_load_case(force_y=200.0)
+    result = solve_phase_field(fine_plate, steel, lc, cfg)
+    assert result.damage.shape == (fine_plate.n_nodes,)

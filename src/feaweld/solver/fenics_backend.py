@@ -320,6 +320,7 @@ class FEniCSBackend(SolverBackend):
         load_case: LoadCase,
         time_steps: NDArray,
         heat_source: object | None = None,
+        initial_temperature: NDArray | None = None,
     ) -> FEAResults:
         """Transient thermal solve using backward Euler time stepping."""
         _require_dolfinx()
@@ -341,7 +342,11 @@ class FEniCSBackend(SolverBackend):
 
         # Previous temperature
         T_n = dolfinx.fem.Function(V)
-        T_n.x.array[:] = 20.0  # initial condition
+        if initial_temperature is not None:
+            init_t = np.asarray(initial_temperature, dtype=np.float64)
+            T_n.x.array[:len(init_t)] = init_t[:len(T_n.x.array)]
+        else:
+            T_n.x.array[:] = 20.0  # initial condition
 
         # Material properties (use room-temperature values for simplicity;
         # for full nonlinearity, one would iterate within each time step)

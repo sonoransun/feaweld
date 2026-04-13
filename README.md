@@ -102,11 +102,21 @@ flowchart LR
     YAML["YAML Case"] --> MAT["Materials"] & DEF["Defects"]
     MAT --> GEO["Geometry"]
     GEO --> MESH["Mesh"]
-    MESH --> SOLVE["Solver"]
+    MESH --> MP{"Multi-pass?"}
+    MP -- yes --> MPTH["Multi-Pass\nThermal Cycle"]
+    MPTH --> SOLVE["Solver"]
+    MP -- no --> SOLVE
     SOLVE --> HS["Hotspot"] & DG["Dong"] & LN["Linearization"] & SD["SED"]
     HS & DG & LN & SD --> FAT["Fatigue"]
-    FAT --> PROB["Probabilistic"]
+    FAT --> FRAC{"Fracture?"}
+    FRAC -- phase-field --> PF["Phase-Field\nFracture"]
+    FRAC -- J-integral --> JI["J-Integral\nK-Factors"]
+    FRAC -- no --> PROB["Probabilistic"]
+    PF & JI --> PROB
+    JI --> DT{"Digital Twin?"}
+    DT -- yes --> ENKF["EnKF\nAssimilation"]
     PROB --> RPT["Report"]
+    ENKF --> RPT
 ```
 
 ## Key Capabilities
@@ -117,6 +127,8 @@ flowchart LR
 - Goldak double-ellipsoid heat source for welding simulation with element birth-death
 - J2 elastoplastic constitutive model with radial return mapping
 - Norton-Bailey creep for post-weld heat treatment (PWHT) stress relaxation
+- Phase-field brittle fracture (Bourdin/Francfort AT2) on TRI3 and TET4 meshes with Miehe spectral and Amor volumetric-deviatoric energy splits
+- Multi-pass welding thermal cycle solver with element birth-death, interpass cooldown monitoring, and temperature carry-forward between passes
 
 **Fatigue Assessment**
 - Eight post-processing methods: nominal (ASME VIII), hot-spot (IIW Type A/B), Battelle/Dong mesh-insensitive structural stress, effective notch stress (FAT225), strain energy density (Lazzarin), through-thickness linearization, Blodgett hand calculations
@@ -136,6 +148,13 @@ flowchart LR
 - Parameter sweeps (grid or one-at-a-time) over loads, materials, mesh refinement
 - Distributed scaling to Dask or Ray clusters for multi-node studies
 - Automated comparison reports with metric tables, delta computation, sensitivity plots
+
+**Digital Twin & Online Monitoring**
+- Multi-state Ensemble Kalman Filter for joint crack-length and Paris-law parameter estimation (state = [a, log(C), m])
+- FEA-informed stress intensity factor interpolation via tabulated J-integral results or handbook formulae with residual stress integration
+- Multi-sensor fusion: ultrasonic, strain-gauge, and ACPD observation operators with configurable noise models
+- Ensemble-based remaining useful life prediction with percentile bounds (p05, p95)
+- MQTT / OPC-UA sensor ingestion with WebSocket dashboard and Bayesian posterior calibration
 
 **Pipeline & Orchestration**
 - DAG-based pipeline execution with concurrent post-processing stage batches
@@ -292,11 +311,64 @@ volumetric joints, defect populations, multi-axial fatigue, fracture mechanics
   <img src="docs/animations/phase_field_crack_propagation.gif" alt="Phase field crack propagation" width="80%">
 </p>
 
+#### Phase-field staggered solver algorithm
+
+```mermaid
+sequenceDiagram
+    participant LC as Load Controller
+    participant U as u-step (displacement)
+    participant H as History Field
+    participant D as d-step (damage)
+
+    LC->>LC: Apply load fraction lambda
+    loop Staggered iterations
+        LC->>U: Assemble degraded K_u with g(d) = (1-d)^2 + k
+        U->>U: Solve K_u * u = f(lambda)
+        U->>H: psi = 0.5 * eps^T C eps (or psi_plus via spectral/Amor split)
+        H->>H: H = max(H, psi) — monotone history
+        H->>D: Assemble K_d(H) and f_d(H)
+        D->>D: Solve, clamp d in [0,1], enforce irreversibility
+        D-->>LC: Converged if ||d_new - d_old|| < tol
+    end
+    Note over LC,D: Supports TRI3 (2D) and TET4 (3D) meshes
+    Note over U,H: Energy split: NONE / SPECTRAL / VOLUMETRIC_DEVIATORIC
+```
+
 ### Multi-pass welding thermal cycle
 
 <p align="center">
   <img src="docs/animations/multipass_thermal_cycle.gif" alt="Multipass thermal cycle" width="80%">
 </p>
+
+#### Multi-pass thermal cycle orchestration
+
+```mermaid
+sequenceDiagram
+    participant O as Orchestrator
+    participant BD as Birth-Death
+    participant HS as Masked Heat Source
+    participant B as Solver Backend
+    participant IC as Interpass Check
+
+    O->>O: T = preheat_temp (all nodes)
+    loop Each WeldPass
+        O->>BD: Lookup pass_N elements
+        O->>HS: Wrap Goldak source + birth-death mask
+        O->>B: solve_thermal_transient(initial_temperature=T)
+        B-->>O: Temperature history for this pass
+        O->>O: T = final temperature snapshot
+        alt Not last pass
+            O->>IC: T_max > interpass_temp_max?
+            IC-->>O: Run cooldown (no heat source)
+            O->>B: solve_thermal_transient(heat_source=None, initial_temperature=T)
+            B-->>O: Cooled temperature field
+            O->>O: T = cooled snapshot
+        end
+    end
+    opt Residual stress
+        O->>O: sigma_res = -C : alpha * (T - T_ref)
+    end
+```
 
 ### Active learning over parametric studies
 
@@ -310,6 +382,51 @@ volumetric joints, defect populations, multi-axial fatigue, fracture mechanics
   <img src="docs/animations/enkf_crack_tracking.gif" alt="EnKF crack-length tracking" width="80%">
 </p>
 
+#### Multi-state EnKF data flow
+
+```mermaid
+flowchart LR
+    subgraph Sensors
+        US["Ultrasonic\n(crack length)"]
+        SG["Strain Gauge\n(near-tip strain)"]
+        AC["ACPD\n(potential drop)"]
+    end
+
+    subgraph Operators["Observation Operators H(x)"]
+        HU["a"]
+        HS2["dK(a) / E*sqrt(2*pi*r)"]
+        HA["slope * a + intercept"]
+    end
+
+    US --> HU
+    SG --> HS2
+    AC --> HA
+
+    subgraph EnKF["MultiStateCrackEnKF"]
+        direction TB
+        STATE["Ensemble (N x 3)\nstate = a, log(C), m"]
+        PRED["Predict:\nda/dN = exp(logC) * dK(a)^m"]
+        UPD["Update: matrix Kalman gain\nK = P_xy * inv(P_yy + R)"]
+        INF["Adaptive inflation\nif spread collapses"]
+        STATE --> PRED --> UPD --> INF --> STATE
+    end
+
+    HU & HS2 & HA --> UPD
+
+    subgraph SIF["SIF Pipeline"]
+        direction TB
+        TAB["SIFTable\n(from J-integral / handbook)"]
+        RES["K_res(a)\n(Bueckner integral)"]
+        COMB["combined_sif\ndK_eff = K_applied + K_res"]
+        TAB --> COMB
+        RES --> COMB
+    end
+
+    COMB --> PRED
+
+    STATE --> RUL["Remaining Life\nDistribution\n(p05, median, p95)"]
+```
+
 ### Solver backend hierarchy
 
 ```mermaid
@@ -318,7 +435,7 @@ classDiagram
         <<abstract>>
         +solve_static(mesh, material, load_case, temperature)
         +solve_thermal_steady(mesh, material, load_case)
-        +solve_thermal_transient(mesh, material, load_case, time_steps)
+        +solve_thermal_transient(mesh, material, load_case, time_steps, heat_source, initial_temperature)
         +solve_coupled(mesh, material, mech_lc, thermal_lc, time_steps)
     }
     class FEniCSBackend
@@ -382,7 +499,7 @@ flowchart TB
 ## Project Metrics
 
 - 110+ source modules, ~30,000 lines of code
-- 506 passing tests across 60 test modules
+- 525+ passing tests across 60+ test modules
 - 49 material databases (7 categories) with temperature-dependent properties
 - 6 JSON reference datasets (SCF, CCT, S-N details, residual stress, filler metals, weld efficiency)
-- 5 joint geometry types, 4 solver backends, 8+ post-processing methods, 6 multi-axial criteria
+- 5 joint geometry types, 4 solver backends, 8+ post-processing methods, 6 multi-axial criteria, 3 energy decomposition modes

@@ -1,0 +1,7 @@
+{
+  "passes": [
+    {"order": 1, "pass_type": "root", "start_time": 0.0, "duration": 10.0, "voltage": 22.0, "current": 180.0, "travel_speed": 4.0, "efficiency": 0.85, "bead_area": 15.0},
+    {"order": 2, "pass_type": "fill", "start_time": 15.0, "duration": 12.0, "voltage": 25.0, "current": 220.0, "travel_speed": 5.0, "efficiency": 0.80, "bead_area": 25.0},
+    {"order": 3, "pass_type": "cap", "start_time": 35.0, "duration": 8.0, "voltage": 26.0, "current": 200.0, "travel_speed": 6.0, "efficiency": 0.80, "bead_area": 20.0}
+  ]
+}

@@ -137,6 +137,9 @@ class MultiPassConfig(BaseModel):
     sequence_name: str | None = None  # e.g. "v_groove_3pass"
     preheat_temp: float = 20.0
     interpass_temp_max: float = 250.0
+    interpass_cooldown_s: float = 0.0
+    steps_per_pass: int = 50
+    compute_residual_stress: bool = False
 
 
 class WeldPathConfig(BaseModel):
@@ -145,6 +148,26 @@ class WeldPathConfig(BaseModel):
     control_points: list[tuple[float, float, float]] = Field(default_factory=list)
     spline_mode: Literal["linear", "bspline", "catmull_rom"] = "bspline"
     spline_degree: int = 3
+
+
+class PhaseFieldWorkflowConfig(BaseModel):
+    """Phase-field fracture configuration."""
+    enabled: bool = False
+    l0: float = 0.1
+    Gc: float = 2.7
+    n_load_steps: int = 20
+    max_load: float = 1.0
+    staggered_tol: float = 1e-4
+    max_staggered_iters: int = 50
+    min_mesh_ratio: float = 4.0
+    energy_split: str = "none"
+    use_thermal_prestress: bool = False
+
+
+class DigitalTwinConfig(BaseModel):
+    """Digital twin / online monitoring configuration."""
+    enabled: bool = False
+    monitor_config: dict = Field(default_factory=dict)
 
 
 class AnalysisCase(BaseModel):
@@ -162,6 +185,8 @@ class AnalysisCase(BaseModel):
     defects: DefectConfig = Field(default_factory=DefectConfig)
     multipass: MultiPassConfig = Field(default_factory=MultiPassConfig)
     weld_path: WeldPathConfig = Field(default_factory=WeldPathConfig)
+    phase_field: PhaseFieldWorkflowConfig = Field(default_factory=PhaseFieldWorkflowConfig)
+    digital_twin: DigitalTwinConfig = Field(default_factory=DigitalTwinConfig)
     output_dir: str = "results"
 
 
@@ -269,7 +294,38 @@ def run_analysis(case: AnalysisCase) -> WorkflowResult:
         # Build load case
         load_case_obj = _build_load_case(case.load, mesh)
 
-        if case.thermal.enabled:
+        if case.multipass.enabled and case.thermal.enabled:
+            from feaweld.solver.multipass_thermal import (
+                solve_multipass_thermal, MultiPassThermalConfig,
+            )
+            seq = _load_weld_sequence(case)
+            if seq is not None:
+                mp_config = MultiPassThermalConfig(
+                    preheat_temp=case.multipass.preheat_temp,
+                    interpass_temp_max=case.multipass.interpass_temp_max,
+                    interpass_cooldown_s=case.multipass.interpass_cooldown_s,
+                    steps_per_pass=case.multipass.steps_per_pass,
+                    compute_residual_stress=case.multipass.compute_residual_stress,
+                )
+                mp_result = solve_multipass_thermal(
+                    backend=backend, mesh=mesh, material=base,
+                    sequence=seq, thermal_lc=load_case_obj, config=mp_config,
+                )
+                fea_results = mp_result.final_fea_results
+                result.extensions["multipass"] = {
+                    "sequence_name": case.multipass.sequence_name,
+                    "n_passes": len(seq.passes),
+                    "total_duration": seq.total_duration(),
+                    "interpass_checks": [
+                        {"pass": c.pass_order, "max_temp": c.max_temperature,
+                         "cooldown_s": c.cooldown_time, "passed": c.passed}
+                        for c in mp_result.interpass_checks
+                    ],
+                }
+            else:
+                fea_results = backend.solve_static(mesh, base, load_case_obj,
+                                                    temperature=case.material.temperature)
+        elif case.thermal.enabled:
             from feaweld.core.loads import WeldingHeatInput
             heat = WeldingHeatInput(
                 voltage=case.thermal.voltage,
@@ -340,6 +396,26 @@ def run_analysis(case: AnalysisCase) -> WorkflowResult:
                 _apply_j_integral(result, case)
             except Exception as e:
                 result.errors.append(f"J-integral: {e}")
+
+        # Step 6c: Optional phase-field fracture
+        if case.phase_field.enabled:
+            try:
+                logger.info("Stage: phase-field fracture")
+                _apply_phase_field(result, case)
+            except Exception as e:
+                result.errors.append(f"Phase-field fracture: {e}")
+
+        # Step 6d: Digital twin SIF export
+        if case.digital_twin.enabled and case.postprocess.compute_k_factors:
+            try:
+                j_ext = result.extensions.get("j_integral", {})
+                if j_ext:
+                    result.extensions["sif_table"] = {
+                        "K_I": j_ext.get("K_I", 0.0),
+                        "J": j_ext.get("J", 0.0),
+                    }
+            except Exception as e:
+                result.errors.append(f"Digital twin SIF export: {e}")
 
         # Step 7: Probabilistic
         if case.probabilistic.enabled:
@@ -581,44 +657,43 @@ def _apply_defect_population(
     }
 
 
-def _apply_multipass_metadata(
-    result: WorkflowResult, case: AnalysisCase
-) -> None:
-    """Load a named multipass sequence JSON and stash summary metadata."""
+def _load_weld_sequence(case: AnalysisCase):
+    """Load a WeldSequence from the bundled data registry."""
     sequence_name = case.multipass.sequence_name
     if not sequence_name:
-        return
-
+        return None
     from feaweld.data.registry import DataRegistry
     from feaweld.core.types import WeldPass, WeldSequence
     import json
-
     reg = DataRegistry()
     key = f"multipass_sequences/{sequence_name}"
     try:
         path = reg.get_dataset_path(key)
     except KeyError:
-        # Graceful pass-through when the sequence isn't bundled.
-        result.extensions["multipass"] = {
-            "sequence_name": sequence_name,
-            "n_passes": 0,
-            "total_duration": 0.0,
-            "status": "sequence_not_found",
-        }
-        return
-
+        return None
     with path.open("r", encoding="utf-8") as fh:
         data = json.load(fh)
-
-    passes_data = data.get("passes", [])
-    passes = [WeldPass(**p) for p in passes_data]
-    seq = WeldSequence(
+    passes = [WeldPass(**p) for p in data.get("passes", [])]
+    return WeldSequence(
         passes=passes,
         preheat_temp=case.multipass.preheat_temp,
         interpass_temp_max=case.multipass.interpass_temp_max,
     )
+
+
+def _apply_multipass_metadata(
+    result: WorkflowResult, case: AnalysisCase
+) -> None:
+    """Load a named multipass sequence JSON and stash summary metadata."""
+    seq = _load_weld_sequence(case)
+    if seq is None:
+        result.extensions["multipass"] = {
+            "sequence_name": case.multipass.sequence_name,
+            "n_passes": 0, "total_duration": 0.0, "status": "sequence_not_found",
+        }
+        return
     result.extensions["multipass"] = {
-        "sequence_name": sequence_name,
+        "sequence_name": case.multipass.sequence_name,
         "n_passes": len(seq.passes),
         "total_duration": seq.total_duration(),
     }
@@ -696,6 +771,34 @@ def _apply_j_integral(
     result.extensions["j_integral"] = {
         "J": float(j_result.J_value),
         "K_I": float(j_result.K_I),
+    }
+
+
+def _apply_phase_field(result: WorkflowResult, case: AnalysisCase) -> None:
+    """Run phase-field fracture and store results in extensions."""
+    from feaweld.fracture.phase_field import (
+        PhaseFieldConfig, solve_phase_field, EnergyDecomposition,
+    )
+    mesh = result.mesh
+    if mesh is None:
+        return
+    pf_cfg = case.phase_field
+    config = PhaseFieldConfig(
+        l0=pf_cfg.l0, Gc=pf_cfg.Gc, n_load_steps=pf_cfg.n_load_steps,
+        max_load=pf_cfg.max_load, staggered_tol=pf_cfg.staggered_tol,
+        max_staggered_iters=pf_cfg.max_staggered_iters,
+        min_mesh_ratio=pf_cfg.min_mesh_ratio,
+        energy_split=EnergyDecomposition(pf_cfg.energy_split),
+    )
+    from feaweld.core.materials import load_material
+    material = load_material(case.material.base_metal)
+    load_case_obj = _build_load_case(case.load, mesh)
+    fracture_result = solve_phase_field(mesh, material, load_case_obj, config)
+    result.extensions["phase_field"] = {
+        "converged": fracture_result.converged,
+        "max_damage": float(fracture_result.damage.max()),
+        "reaction_force": fracture_result.reaction_force,
+        "metadata": fracture_result.metadata,
     }
 
 

@@ -535,6 +535,7 @@ class NeuralBackend(SolverBackend):
         load_case: LoadCase,
         time_steps: NDArray,
         heat_source: object | None = None,
+        initial_temperature: NDArray | None = None,
     ) -> FEAResults:
         raise NotImplementedError(
             "NeuralBackend only supports solve_static in the A5 MVP. "

@@ -30,6 +30,7 @@ but calling :func:`solve_phase_field` raises :class:`ImportError`.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any
 
 import numpy as np
@@ -60,6 +61,18 @@ _RESIDUAL_STIFFNESS = 1.0e-6  # k in g(d) = (1-d)^2 + k
 
 
 # ---------------------------------------------------------------------------
+# Energy decomposition enum
+# ---------------------------------------------------------------------------
+
+
+class EnergyDecomposition(str, Enum):
+    """Elastic energy split strategy for the phase-field driving force."""
+    NONE = "none"
+    SPECTRAL = "spectral"
+    VOLUMETRIC_DEVIATORIC = "volumetric_deviatoric"
+
+
+# ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
 
@@ -87,6 +100,10 @@ class PhaseFieldConfig:
         Minimum ``l0 / h_avg`` required; raises ``ValueError`` otherwise.
         The usual Bourdin rule of thumb is ``h <= l0 / 2`` to resolve the
         diffuse crack; we default to ``4`` for safety.
+    energy_split:
+        Elastic energy decomposition for the damage driving force.
+        ``NONE`` uses the full energy (original AT2), ``SPECTRAL`` uses the
+        Miehe spectral split, ``VOLUMETRIC_DEVIATORIC`` uses the Amor split.
     """
 
     l0: float = 0.1
@@ -96,6 +113,7 @@ class PhaseFieldConfig:
     staggered_tol: float = 1e-4
     max_staggered_iters: int = 50
     min_mesh_ratio: float = 4.0
+    energy_split: EnergyDecomposition = EnergyDecomposition.NONE
 
 
 # ---------------------------------------------------------------------------
@@ -126,15 +144,28 @@ def _tri_edge_lengths(coords: NDArray[np.float64]) -> NDArray[np.float64]:
     return np.array([e0, e1, e2])
 
 
+def _tet_edge_lengths(coords: NDArray[np.float64]) -> NDArray[np.float64]:
+    """Edge lengths for a single TET4 (coords is (4, 3))."""
+    pairs = [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
+    return np.array([np.linalg.norm(coords[j] - coords[i]) for i, j in pairs])
+
+
 def _average_edge_length(mesh: FEMesh) -> float:
     coords = mesh.nodes
     acc = 0.0
     cnt = 0
-    for conn in mesh.elements:
-        tri = coords[conn]
-        lens = _tri_edge_lengths(tri)
-        acc += float(lens.sum())
-        cnt += 3
+    if mesh.element_type is ElementType.TET4:
+        for conn in mesh.elements:
+            tet = coords[conn]
+            lens = _tet_edge_lengths(tet)
+            acc += float(lens.sum())
+            cnt += 6
+    else:
+        for conn in mesh.elements:
+            tri = coords[conn]
+            lens = _tri_edge_lengths(tri)
+            acc += float(lens.sum())
+            cnt += 3
     if cnt == 0:
         return 0.0
     return acc / cnt
@@ -343,30 +374,319 @@ def _assemble_Kd_fd_tri3(
 
 
 # ---------------------------------------------------------------------------
-# Elastic energy density (tri3 plane strain)
+# TET4 / 3D element routines
+# ---------------------------------------------------------------------------
+
+
+# Consistent TET4 mass matrix: (V/20) * [[2,1,1,1],[1,2,1,1],[1,1,2,1],[1,1,1,2]]
+_M_TET4 = np.array([
+    [2.0, 1.0, 1.0, 1.0],
+    [1.0, 2.0, 1.0, 1.0],
+    [1.0, 1.0, 2.0, 1.0],
+    [1.0, 1.0, 1.0, 2.0],
+]) / 20.0
+
+
+def _tet4_shape_derivs(
+    coords: NDArray[np.float64],
+) -> tuple[NDArray[np.float64], float]:
+    """Return shape-function derivatives (4,3) and volume for a TET4.
+
+    Uses cofactors of the ``[1, x, y, z]`` matrix.
+    """
+    x, y, z = coords[:, 0], coords[:, 1], coords[:, 2]
+    M = np.ones((4, 4), dtype=np.float64)
+    M[:, 1] = x
+    M[:, 2] = y
+    M[:, 3] = z
+    det_M = np.linalg.det(M)
+    vol = abs(det_M) / 6.0
+
+    # Cofactors of columns 1, 2, 3 give dN/dx, dN/dy, dN/dz
+    inv_M = np.linalg.inv(M)  # inv_M.T[j, i] = cofactor(i, j) / det
+    dN = inv_M[1:, :].T  # (4, 3) — rows = nodes, cols = (dx, dy, dz)
+    return dN, vol
+
+
+def _precompute_element_kinematics_3d(
+    mesh: FEMesh, C6: NDArray[np.float64],
+) -> tuple[NDArray[np.float64], NDArray[np.float64], NDArray[np.float64]]:
+    """Precompute per-element (B, K0, vol) for a TET4 mesh.
+
+    ``B`` has shape ``(n_elem, 6, 12)`` and ``K0`` shape ``(n_elem, 12, 12)``.
+    """
+    n_elem = mesh.n_elements
+    coords = np.asarray(mesh.nodes, dtype=np.float64)
+
+    B_all = np.zeros((n_elem, 6, 12), dtype=np.float64)
+    K0_all = np.zeros((n_elem, 12, 12), dtype=np.float64)
+    vol_all = np.zeros(n_elem, dtype=np.float64)
+
+    for e in range(n_elem):
+        conn = mesh.elements[e]
+        tet = coords[conn]
+        dN, vol = _tet4_shape_derivs(tet)
+
+        B = np.zeros((6, 12), dtype=np.float64)
+        for i in range(4):
+            c = 3 * i
+            b_i, c_i, d_i = dN[i, 0], dN[i, 1], dN[i, 2]
+            B[0, c] = b_i          # eps_xx
+            B[1, c + 1] = c_i      # eps_yy
+            B[2, c + 2] = d_i      # eps_zz
+            B[3, c] = c_i          # gamma_xy
+            B[3, c + 1] = b_i
+            B[4, c + 1] = d_i      # gamma_yz
+            B[4, c + 2] = c_i
+            B[5, c] = d_i          # gamma_xz
+            B[5, c + 2] = b_i
+
+        K0 = vol * (B.T @ C6 @ B)
+        B_all[e] = B
+        K0_all[e] = K0
+        vol_all[e] = vol
+
+    return B_all, K0_all, vol_all
+
+
+def _element_dofs_3d(mesh: FEMesh) -> NDArray[np.int64]:
+    """Return (n_elem, 12) global DOF indices per element for TET4."""
+    elems = mesh.elements.astype(np.int64)
+    n_elem = elems.shape[0]
+    dofs = np.empty((n_elem, 12), dtype=np.int64)
+    for i in range(4):
+        dofs[:, 3 * i] = 3 * elems[:, i]
+        dofs[:, 3 * i + 1] = 3 * elems[:, i] + 1
+        dofs[:, 3 * i + 2] = 3 * elems[:, i] + 2
+    return dofs
+
+
+def _assemble_Ku_tet4(
+    mesh: FEMesh,
+    K0_all: NDArray[np.float64],
+    dofs_all: NDArray[np.int64],
+    damage: NDArray[np.float64],
+) -> NDArray[np.float64]:
+    """Assemble the degraded displacement stiffness on TET4 / 3D."""
+    n_dof = mesh.n_nodes * 3
+    K = np.zeros((n_dof, n_dof), dtype=np.float64)
+
+    elems = mesh.elements.astype(np.int64)
+    d_nodal = damage[elems]
+    d_bar = d_nodal.mean(axis=1)
+    g = (1.0 - d_bar) ** 2 + _RESIDUAL_STIFFNESS
+
+    for e in range(mesh.n_elements):
+        ke = g[e] * K0_all[e]
+        dofs = dofs_all[e]
+        K[np.ix_(dofs, dofs)] += ke
+
+    return K
+
+
+def _precompute_damage_kinematics_3d(
+    mesh: FEMesh,
+) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """Precompute per-element (Me, Be) for the damage subproblem on TET4."""
+    n_elem = mesh.n_elements
+    coords = np.asarray(mesh.nodes, dtype=np.float64)
+    Me_all = np.zeros((n_elem, 4, 4), dtype=np.float64)
+    Be_all = np.zeros((n_elem, 4, 4), dtype=np.float64)
+
+    for e in range(n_elem):
+        conn = mesh.elements[e].astype(np.int64)
+        tet = coords[conn]
+        dN, vol = _tet4_shape_derivs(tet)
+        Me_all[e] = _M_TET4 * vol
+        Be_all[e] = (dN @ dN.T) * vol  # (4,3)(3,4) = (4,4)
+    return Me_all, Be_all
+
+
+def _assemble_Kd_fd_tet4(
+    mesh: FEMesh,
+    history: NDArray[np.float64],
+    Gc: float,
+    l0: float,
+    Me_all: NDArray[np.float64],
+    Be_all: NDArray[np.float64],
+) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """Assemble the damage sub-problem stiffness and RHS for TET4."""
+    n = mesh.n_nodes
+    Kd = np.zeros((n, n), dtype=np.float64)
+    fd = np.zeros(n, dtype=np.float64)
+
+    elems = mesh.elements.astype(np.int64)
+    H_node = history[elems]
+    H_e = H_node.mean(axis=1)
+    vol_all = Me_all.sum(axis=(1, 2))
+
+    for e in range(mesh.n_elements):
+        ke = (Gc / l0 + 2.0 * H_e[e]) * Me_all[e] + Gc * l0 * Be_all[e]
+        fe = (2.0 * H_e[e]) * (vol_all[e] / 4.0) * np.ones(4)
+
+        conn = elems[e]
+        Kd[np.ix_(conn, conn)] += ke
+        fd[conn] += fe
+
+    return Kd, fd
+
+
+# ---------------------------------------------------------------------------
+# Energy split functions
+# ---------------------------------------------------------------------------
+
+
+def _spectral_split_2d(
+    eps_batch: NDArray[np.float64],
+    lam: float,
+    mu: float,
+) -> NDArray[np.float64]:
+    """Miehe spectral split for 2D plane strain. Returns psi_plus per element.
+
+    ``eps_batch`` has shape ``(n_elem, 3)`` in Voigt: [eps_xx, eps_yy, gamma_xy].
+    For plane strain, eps_zz = 0 is the third eigenvalue.
+    """
+    n = eps_batch.shape[0]
+    psi_plus = np.zeros(n, dtype=np.float64)
+
+    for i in range(n):
+        exx, eyy, gxy = eps_batch[i, 0], eps_batch[i, 1], eps_batch[i, 2]
+        # 2x2 strain tensor
+        eps_tensor = np.array([[exx, 0.5 * gxy], [0.5 * gxy, eyy]])
+        eigvals = np.linalg.eigvalsh(eps_tensor)
+        # Include eps_zz = 0 as third eigenvalue for plane strain
+        all_eigvals = np.array([eigvals[0], eigvals[1], 0.0])
+        tr_eps = all_eigvals.sum()
+        tr_plus = max(tr_eps, 0.0)
+        eigvals_plus = np.maximum(all_eigvals, 0.0)
+        psi_plus[i] = 0.5 * lam * tr_plus ** 2 + mu * np.sum(eigvals_plus ** 2)
+
+    return psi_plus
+
+
+def _amor_split_2d(
+    eps_batch: NDArray[np.float64],
+    kappa: float,
+    mu: float,
+) -> NDArray[np.float64]:
+    """Amor volumetric-deviatoric split for 2D plane strain. Returns psi_plus.
+
+    ``kappa`` is the bulk modulus: lambda + 2*mu/ndim (ndim=2 for plane strain).
+    """
+    n = eps_batch.shape[0]
+    psi_plus = np.zeros(n, dtype=np.float64)
+
+    for i in range(n):
+        exx, eyy, gxy = eps_batch[i, 0], eps_batch[i, 1], eps_batch[i, 2]
+        tr_eps = exx + eyy  # eps_zz = 0 for plane strain
+        tr_plus = max(tr_eps, 0.0)
+        # Deviatoric strain in Voigt (plane strain: eps_zz = 0, include it)
+        e_vol = tr_eps / 3.0
+        dev_xx = exx - e_vol
+        dev_yy = eyy - e_vol
+        dev_zz = -e_vol  # 0 - tr/3
+        dev_xy = 0.5 * gxy
+        dev_sq = dev_xx ** 2 + dev_yy ** 2 + dev_zz ** 2 + 2.0 * dev_xy ** 2
+        psi_plus[i] = 0.5 * kappa * tr_plus ** 2 + mu * dev_sq
+
+    return psi_plus
+
+
+def _spectral_split_3d(
+    eps_batch: NDArray[np.float64],
+    lam: float,
+    mu: float,
+) -> NDArray[np.float64]:
+    """Miehe spectral split for 3D. Returns psi_plus per element.
+
+    ``eps_batch`` has shape ``(n_elem, 6)`` in Voigt:
+    [eps_xx, eps_yy, eps_zz, gamma_xy, gamma_yz, gamma_xz].
+    """
+    n = eps_batch.shape[0]
+    psi_plus = np.zeros(n, dtype=np.float64)
+
+    for i in range(n):
+        e = eps_batch[i]
+        eps_tensor = np.array([
+            [e[0], 0.5 * e[3], 0.5 * e[5]],
+            [0.5 * e[3], e[1], 0.5 * e[4]],
+            [0.5 * e[5], 0.5 * e[4], e[2]],
+        ])
+        eigvals = np.linalg.eigvalsh(eps_tensor)
+        tr_eps = eigvals.sum()
+        tr_plus = max(tr_eps, 0.0)
+        eigvals_plus = np.maximum(eigvals, 0.0)
+        psi_plus[i] = 0.5 * lam * tr_plus ** 2 + mu * np.sum(eigvals_plus ** 2)
+
+    return psi_plus
+
+
+def _amor_split_3d(
+    eps_batch: NDArray[np.float64],
+    kappa: float,
+    mu: float,
+) -> NDArray[np.float64]:
+    """Amor volumetric-deviatoric split for 3D. Returns psi_plus."""
+    n = eps_batch.shape[0]
+    psi_plus = np.zeros(n, dtype=np.float64)
+
+    for i in range(n):
+        e = eps_batch[i]
+        tr_eps = e[0] + e[1] + e[2]
+        tr_plus = max(tr_eps, 0.0)
+        e_vol = tr_eps / 3.0
+        dev = np.array([
+            e[0] - e_vol, e[1] - e_vol, e[2] - e_vol,
+            0.5 * e[3], 0.5 * e[4], 0.5 * e[5],
+        ])
+        dev_sq = dev[0] ** 2 + dev[1] ** 2 + dev[2] ** 2 + 2.0 * (
+            dev[3] ** 2 + dev[4] ** 2 + dev[5] ** 2
+        )
+        psi_plus[i] = 0.5 * kappa * tr_plus ** 2 + mu * dev_sq
+
+    return psi_plus
+
+
+# ---------------------------------------------------------------------------
+# Elastic energy density
 # ---------------------------------------------------------------------------
 
 
 def _element_psi_el(
     mesh: FEMesh,
     u: NDArray[np.float64],
-    C_ps: NDArray[np.float64],
+    C: NDArray[np.float64],
     B_all: NDArray[np.float64],
     dofs_all: NDArray[np.int64],
+    energy_split: EnergyDecomposition = EnergyDecomposition.NONE,
+    lam: float = 0.0,
+    mu: float = 0.0,
 ) -> NDArray[np.float64]:
-    """Return per-element *undegraded* elastic energy density psi_el.
+    """Return per-element *undegraded* elastic energy density (or psi_plus).
 
-    psi_el = 0.5 * eps : sigma_0 = 0.5 * eps^T C eps
-
-    The "+" split (Amor / Miehe) is a small follow-up — for tensile-dominated
-    DCB-style loading the full energy is an acceptable MVP approximation.
+    When ``energy_split`` is ``NONE``, returns the full energy density
+    ``psi_el = 0.5 * eps^T C eps``.  Otherwise returns the tensile part only.
     """
-    # Vectorized over elements using precomputed B matrices.
-    u_elem = u[dofs_all]                          # (n_elem, 6)
-    eps = np.einsum("eij,ej->ei", B_all, u_elem)  # (n_elem, 3)
-    sig = eps @ C_ps.T                            # (n_elem, 3)
-    psi = 0.5 * np.sum(eps * sig, axis=1)         # (n_elem,)
-    return psi
+    n_voigt = B_all.shape[1]  # 3 for TRI3, 6 for TET4
+    dof_per_elem = B_all.shape[2]
+    u_elem = u[dofs_all]                               # (n_elem, dof_per_elem)
+    eps = np.einsum("eij,ej->ei", B_all, u_elem)       # (n_elem, n_voigt)
+
+    if energy_split is EnergyDecomposition.NONE:
+        sig = eps @ C.T
+        psi = 0.5 * np.sum(eps * sig, axis=1)
+        return psi
+
+    is_3d = (n_voigt == 6)
+    if energy_split is EnergyDecomposition.SPECTRAL:
+        if is_3d:
+            return _spectral_split_3d(eps, lam, mu)
+        return _spectral_split_2d(eps, lam, mu)
+    else:  # VOLUMETRIC_DEVIATORIC
+        kappa = lam + 2.0 * mu / (3.0 if is_3d else 2.0)
+        if is_3d:
+            return _amor_split_3d(eps, kappa, mu)
+        return _amor_split_2d(eps, kappa, mu)
 
 
 def _project_element_to_nodes(
@@ -391,7 +711,8 @@ def _project_element_to_nodes(
 
 
 def _gather_disp_bcs(
-    mesh: FEMesh, load_case: LoadCase, scale: float
+    mesh: FEMesh, load_case: LoadCase, scale: float,
+    dof_per_node: int = 2,
 ) -> tuple[NDArray[np.int64], NDArray[np.float64], NDArray[np.float64], list[int]]:
     """Return (constrained_dofs, constrained_vals, f_global, loaded_dofs).
 
@@ -400,7 +721,6 @@ def _gather_disp_bcs(
     load fraction. ``loaded_dofs`` lists DOFs where a force BC was applied
     — these are used to evaluate the reaction at the end of each step.
     """
-    dof_per_node = 2
     n_dof = mesh.n_nodes * dof_per_node
     f = np.zeros(n_dof, dtype=np.float64)
     cons_dofs: list[int] = []
@@ -487,13 +807,13 @@ def solve_phase_field(
     config: PhaseFieldConfig = PhaseFieldConfig(),
     initial_damage: NDArray[np.float64] | None = None,
 ) -> FractureResult:
-    """Staggered AT2 phase-field fracture solver on TRI3 / plane strain.
+    """Staggered AT2 phase-field fracture solver for TRI3 and TET4 meshes.
 
     Parameters
     ----------
     mesh:
-        FEMesh — must be :attr:`ElementType.TRI3`. 3D / tets are not yet
-        supported (raises ``NotImplementedError``).
+        FEMesh — must be :attr:`ElementType.TRI3` (2D plane strain) or
+        :attr:`ElementType.TET4` (3D).
     material:
         Linear-elastic material; evaluated at ``20 C``.
     load_case:
@@ -510,11 +830,15 @@ def solve_phase_field(
     """
     _require_jax()
 
-    if mesh.element_type is not ElementType.TRI3:
+    is_3d = mesh.element_type is ElementType.TET4
+    if mesh.element_type not in (ElementType.TRI3, ElementType.TET4):
         raise NotImplementedError(
-            "solve_phase_field currently supports TRI3 / plane strain only; "
-            f"got {mesh.element_type.value}. TET4 / 3D is a follow-up."
+            f"solve_phase_field supports TRI3 and TET4 only; "
+            f"got {mesh.element_type.value}."
         )
+
+    dpn = 3 if is_3d else 2  # DOFs per node
+    n_per_elem = 4 if is_3d else 3
 
     # -- Mesh density guard --------------------------------------------------
     h_avg = _average_edge_length(mesh)
@@ -541,16 +865,28 @@ def solve_phase_field(
 
     history = np.zeros(n, dtype=np.float64)
 
-    C_ps = material.elasticity_tensor_2d(20.0, plane="strain")
+    # -- Elasticity tensor and Lame parameters for energy split ---------------
+    lam_val = material.lame_lambda(20.0)
+    mu_val = material.lame_mu(20.0)
+
+    if is_3d:
+        C_mat = material.elasticity_tensor_3d(20.0)
+    else:
+        C_mat = material.elasticity_tensor_2d(20.0, plane="strain")
 
     # -- Precompute kinematics once (they only depend on geometry) ----------
-    B_all, K0_all, _area_all = _precompute_element_kinematics(
-        mesh, C_ps, thickness
-    )
-    dofs_all = _element_dofs(mesh)
-    Me_all, Be_all = _precompute_damage_kinematics(mesh, thickness)
+    if is_3d:
+        B_all, K0_all, _vol_all = _precompute_element_kinematics_3d(mesh, C_mat)
+        dofs_all = _element_dofs_3d(mesh)
+        Me_all, Be_all = _precompute_damage_kinematics_3d(mesh)
+    else:
+        B_all, K0_all, _area_all = _precompute_element_kinematics(
+            mesh, C_mat, thickness
+        )
+        dofs_all = _element_dofs(mesh)
+        Me_all, Be_all = _precompute_damage_kinematics(mesh, thickness)
 
-    # Load fractions: n_load_steps ≥ 1 steps from > 0 to max_load.
+    # Load fractions: n_load_steps >= 1 steps from > 0 to max_load.
     n_steps = int(config.n_load_steps)
     if n_steps < 1:
         raise ValueError("n_load_steps must be >= 1")
@@ -562,11 +898,16 @@ def solve_phase_field(
     damage_history: list[NDArray[np.float64]] = []
     all_converged = True
 
-    u_flat = np.zeros(n * 2, dtype=np.float64)
+    u_flat = np.zeros(n * dpn, dtype=np.float64)
+    esplit = config.energy_split
+
+    # Select assembly functions based on element type
+    _assemble_Ku = _assemble_Ku_tet4 if is_3d else _assemble_Ku_tri3
+    _assemble_Kd_fd = _assemble_Kd_fd_tet4 if is_3d else _assemble_Kd_fd_tri3
 
     for step_idx, lam in enumerate(load_fractions):
         cons_dofs, cons_vals, f, loaded_dofs = _gather_disp_bcs(
-            mesh, load_case, scale=float(lam)
+            mesh, load_case, scale=float(lam), dof_per_node=dpn,
         )
 
         step_converged = False
@@ -574,17 +915,20 @@ def solve_phase_field(
             d_old = d.copy()
 
             # -- u-solve with current damage ---------------------------------
-            K_u = _assemble_Ku_tri3(mesh, K0_all, dofs_all, d)
+            K_u = _assemble_Ku(mesh, K0_all, dofs_all, d)
             K_u_p, f_p = _apply_penalty(K_u, f, cons_dofs, cons_vals)
             u_flat = np.linalg.solve(K_u_p, f_p)
 
             # -- update history (monotone) -----------------------------------
-            psi_e = _element_psi_el(mesh, u_flat, C_ps, B_all, dofs_all)
+            psi_e = _element_psi_el(
+                mesh, u_flat, C_mat, B_all, dofs_all,
+                energy_split=esplit, lam=lam_val, mu=mu_val,
+            )
             psi_nodal = _project_element_to_nodes(mesh, psi_e)
             history = np.maximum(history, psi_nodal)
 
             # -- d-solve -----------------------------------------------------
-            K_d, f_d = _assemble_Kd_fd_tri3(
+            K_d, f_d = _assemble_Kd_fd(
                 mesh, history, config.Gc, config.l0, Me_all, Be_all
             )
 
@@ -597,7 +941,6 @@ def solve_phase_field(
                 f_d_p[int(dof)] += _PENALTY * 1.0
 
             d_new = np.linalg.solve(K_d_p, f_d_p)
-            # Damage is bounded [0,1] and monotone non-decreasing.
             d_new = np.clip(d_new, 0.0, 1.0)
             d_new = np.maximum(d_new, d_old)
 
@@ -611,14 +954,13 @@ def solve_phase_field(
         if not step_converged:
             all_converged = False
 
-        # Reaction at the loaded DOFs (use the undegraded-in-BC stiffness).
-        K_u_final = _assemble_Ku_tri3(mesh, K0_all, dofs_all, d)
+        K_u_final = _assemble_Ku(mesh, K0_all, dofs_all, d)
         reaction_history[step_idx] = _reaction_at_loaded(
             K_u_final, u_flat, loaded_dofs
         )
         damage_history.append(d.copy())
 
-    u_out = u_flat.reshape(n, 2).copy()
+    u_out = u_flat.reshape(n, dpn).copy()
 
     return FractureResult(
         displacement=u_out,
@@ -634,6 +976,7 @@ def solve_phase_field(
             "Gc": config.Gc,
             "n_load_steps": n_steps,
             "h_avg": h_avg,
+            "energy_split": config.energy_split.value,
             "backend": "jax",
         },
     )
