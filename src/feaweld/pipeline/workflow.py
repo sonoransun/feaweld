@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 import yaml
 import numpy as np
@@ -17,12 +17,9 @@ from numpy.typing import NDArray
 
 from pydantic import BaseModel, Field
 
-from feaweld.core.logging import get_logger
 from feaweld.core.types import (
-    JointType, SolverType, StressMethod, FEAResults, FEMesh, ElementType,
+    JointType, SolverType, StressMethod, FEAResults, FEMesh,
 )
-
-logger = get_logger(__name__)
 
 
 class MaterialConfig(BaseModel):
@@ -31,7 +28,6 @@ class MaterialConfig(BaseModel):
     weld_metal: str = "E70XX"
     haz: str = "A36"  # often same as base with modified properties
     temperature: float = 20.0  # ambient temperature (C)
-    rve_path: str | None = None  # optional voxel RVE for FFT homogenization (.npz)
 
 
 class GeometryConfig(BaseModel):
@@ -79,11 +75,6 @@ class PostProcessConfig(BaseModel):
     sn_curve: str = "IIW_FAT90"
     fatigue_assessment: bool = True
     singularity_check: bool = True
-    multiaxial_criterion: Literal[
-        "none", "findley", "dang_van", "sines", "crossland",
-        "fatemi_socie", "mcdiarmid",
-    ] = "none"
-    compute_k_factors: bool = False
 
 
 class ThermalConfig(BaseModel):
@@ -107,69 +98,6 @@ class ProbabilisticConfig(BaseModel):
     include_geometric_tolerance: bool = True
 
 
-class DefectConfig(BaseModel):
-    """Weld-defect population configuration.
-
-    Controls ISO 5817 stochastic defect sampling or explicit defect
-    definitions fed into the optional Track E/H defect pipeline. The
-    defect hook runs post-geometry and populates
-    ``WorkflowResult.extensions["defects"]``.
-    """
-    enabled: bool = False
-    standard: str = "ISO 5817"
-    quality_level: str = "B"
-    weld_length: float = 100.0       # mm
-    weld_width: float = 10.0         # mm
-    population_seed: int = 0
-    # If non-empty, use these explicit defect dicts instead of sampling.
-    explicit_defects: list[dict] = Field(default_factory=list)
-
-
-class MultiPassConfig(BaseModel):
-    """Multi-pass welding sequence configuration.
-
-    When enabled, the workflow loads a named
-    :class:`feaweld.core.types.WeldSequence` JSON from the bundled
-    ``multipass_sequences/`` data directory and records summary metadata
-    on ``WorkflowResult.extensions["multipass"]``.
-    """
-    enabled: bool = False
-    sequence_name: str | None = None  # e.g. "v_groove_3pass"
-    preheat_temp: float = 20.0
-    interpass_temp_max: float = 250.0
-    interpass_cooldown_s: float = 0.0
-    steps_per_pass: int = 50
-    compute_residual_stress: bool = False
-
-
-class WeldPathConfig(BaseModel):
-    """Weld-path trajectory configuration (straight vs. spline)."""
-    mode: Literal["straight", "spline"] = "straight"
-    control_points: list[tuple[float, float, float]] = Field(default_factory=list)
-    spline_mode: Literal["linear", "bspline", "catmull_rom"] = "bspline"
-    spline_degree: int = 3
-
-
-class PhaseFieldWorkflowConfig(BaseModel):
-    """Phase-field fracture configuration."""
-    enabled: bool = False
-    l0: float = 0.1
-    Gc: float = 2.7
-    n_load_steps: int = 20
-    max_load: float = 1.0
-    staggered_tol: float = 1e-4
-    max_staggered_iters: int = 50
-    min_mesh_ratio: float = 4.0
-    energy_split: str = "none"
-    use_thermal_prestress: bool = False
-
-
-class DigitalTwinConfig(BaseModel):
-    """Digital twin / online monitoring configuration."""
-    enabled: bool = False
-    monitor_config: dict = Field(default_factory=dict)
-
-
 class AnalysisCase(BaseModel):
     """Complete analysis case definition."""
     name: str = "default"
@@ -182,11 +110,6 @@ class AnalysisCase(BaseModel):
     postprocess: PostProcessConfig = Field(default_factory=PostProcessConfig)
     thermal: ThermalConfig = Field(default_factory=ThermalConfig)
     probabilistic: ProbabilisticConfig = Field(default_factory=ProbabilisticConfig)
-    defects: DefectConfig = Field(default_factory=DefectConfig)
-    multipass: MultiPassConfig = Field(default_factory=MultiPassConfig)
-    weld_path: WeldPathConfig = Field(default_factory=WeldPathConfig)
-    phase_field: PhaseFieldWorkflowConfig = Field(default_factory=PhaseFieldWorkflowConfig)
-    digital_twin: DigitalTwinConfig = Field(default_factory=DigitalTwinConfig)
     output_dir: str = "results"
 
 
@@ -201,7 +124,6 @@ class WorkflowResult:
     probabilistic_results: dict[str, Any] = field(default_factory=dict)
     report_path: str | None = None
     errors: list[str] = field(default_factory=list)
-    extensions: dict[str, Any] = field(default_factory=dict)
 
     @property
     def success(self) -> bool:
@@ -242,37 +164,20 @@ def run_analysis(case: AnalysisCase) -> WorkflowResult:
     Returns:
         WorkflowResult with all results.
     """
-    logger.info("Starting analysis: %s", case.name)
     result = WorkflowResult(case=case)
-
-    # Step 0: Defect population (Track E/H) — runs outside the main
-    # pipeline try block so it still populates extensions even if the
-    # geometry/mesh/solver stages fail (e.g. missing Gmsh in sandbox).
-    if case.defects.enabled:
-        try:
-            logger.info("Stage: defect population")
-            _apply_defect_population(result, case)
-        except Exception as e:  # pragma: no cover - best-effort hook
-            result.errors.append(f"Defect population: {e}")
 
     try:
         # Step 1: Materials
-        logger.info("Stage: materials")
         from feaweld.core.materials import load_material, MaterialSet
         base = load_material(case.material.base_metal)
         weld = load_material(case.material.weld_metal)
         haz = load_material(case.material.haz)
         mat_set = MaterialSet(base_metal=base, weld_metal=weld, haz=haz)
-        logger.debug("Materials loaded: base=%s weld=%s haz=%s",
-                      case.material.base_metal, case.material.weld_metal, case.material.haz)
 
         # Step 2: Geometry
-        logger.info("Stage: geometry (%s)", case.geometry.joint_type.value)
         joint = _build_geometry(case.geometry)
 
         # Step 3: Mesh
-        logger.info("Stage: mesh generation (global=%.2f, toe=%.2f)",
-                      case.mesh.global_size, case.mesh.weld_toe_size)
         from feaweld.mesh.generator import generate_mesh, WeldMeshConfig
         mesh_config = WeldMeshConfig(
             global_size=case.mesh.global_size,
@@ -282,11 +187,8 @@ def run_analysis(case: AnalysisCase) -> WorkflowResult:
         )
         mesh = generate_mesh(joint, mesh_config)
         result.mesh = mesh
-        logger.debug("Mesh: %d nodes, %d elements", mesh.n_nodes, mesh.n_elements)
 
         # Step 4: Solver
-        logger.info("Stage: solver (backend=%s, thermal=%s)",
-                      case.solver.backend, case.thermal.enabled)
         from feaweld.solver.backend import get_backend
         from feaweld.core.types import LoadCase, BoundaryCondition, LoadType
         backend = get_backend(case.solver.backend)
@@ -294,38 +196,7 @@ def run_analysis(case: AnalysisCase) -> WorkflowResult:
         # Build load case
         load_case_obj = _build_load_case(case.load, mesh)
 
-        if case.multipass.enabled and case.thermal.enabled:
-            from feaweld.solver.multipass_thermal import (
-                solve_multipass_thermal, MultiPassThermalConfig,
-            )
-            seq = _load_weld_sequence(case)
-            if seq is not None:
-                mp_config = MultiPassThermalConfig(
-                    preheat_temp=case.multipass.preheat_temp,
-                    interpass_temp_max=case.multipass.interpass_temp_max,
-                    interpass_cooldown_s=case.multipass.interpass_cooldown_s,
-                    steps_per_pass=case.multipass.steps_per_pass,
-                    compute_residual_stress=case.multipass.compute_residual_stress,
-                )
-                mp_result = solve_multipass_thermal(
-                    backend=backend, mesh=mesh, material=base,
-                    sequence=seq, thermal_lc=load_case_obj, config=mp_config,
-                )
-                fea_results = mp_result.final_fea_results
-                result.extensions["multipass"] = {
-                    "sequence_name": case.multipass.sequence_name,
-                    "n_passes": len(seq.passes),
-                    "total_duration": seq.total_duration(),
-                    "interpass_checks": [
-                        {"pass": c.pass_order, "max_temp": c.max_temperature,
-                         "cooldown_s": c.cooldown_time, "passed": c.passed}
-                        for c in mp_result.interpass_checks
-                    ],
-                }
-            else:
-                fea_results = backend.solve_static(mesh, base, load_case_obj,
-                                                    temperature=case.material.temperature)
-        elif case.thermal.enabled:
+        if case.thermal.enabled:
             from feaweld.core.loads import WeldingHeatInput
             heat = WeldingHeatInput(
                 voltage=case.thermal.voltage,
@@ -345,83 +216,27 @@ def run_analysis(case: AnalysisCase) -> WorkflowResult:
             )
 
         result.fea_results = fea_results
-        logger.info("Solver complete")
-
-        # Step 4b: Multi-pass sequence metadata (Track G/H).
-        if case.multipass.enabled:
-            try:
-                logger.info("Stage: multi-pass metadata")
-                _apply_multipass_metadata(result, case)
-            except Exception as e:  # pragma: no cover - best-effort hook
-                result.errors.append(f"Multi-pass metadata: {e}")
 
         # Step 5: Post-processing
         if fea_results.stress is not None:
             for method in case.postprocess.stress_methods:
                 try:
-                    logger.info("Stage: post-processing (%s)", method.value)
                     pp_result = _run_postprocess(method, fea_results, mesh, case)
                     result.postprocess_results[method.value] = pp_result
                 except Exception as e:
                     result.errors.append(f"Post-processing {method}: {e}")
 
-        # Step 5b: Multi-axial fatigue criterion (Track F/H).
-        if case.postprocess.multiaxial_criterion != "none":
-            try:
-                logger.info("Stage: multi-axial fatigue (%s)",
-                             case.postprocess.multiaxial_criterion)
-                _apply_multiaxial_criterion(result, case)
-            except Exception as e:
-                result.errors.append(f"Multi-axial fatigue: {e}")
-
         # Step 6: Fatigue
         if case.postprocess.fatigue_assessment and result.postprocess_results:
             try:
-                logger.info("Stage: fatigue assessment")
                 fatigue = _run_fatigue_assessment(result.postprocess_results, case)
                 result.fatigue_results = fatigue
             except Exception as e:
                 result.errors.append(f"Fatigue assessment: {e}")
 
-            # UQ propagation: lognormal scatter around deterministic life.
-            try:
-                _apply_fatigue_uq(result, case)
-            except Exception as e:
-                result.errors.append(f"Fatigue UQ: {e}")
-
-        # Step 6b: Optional J-integral / K-factor evaluation (Track F/H).
-        if case.postprocess.compute_k_factors:
-            try:
-                logger.info("Stage: J-integral / K-factor")
-                _apply_j_integral(result, case)
-            except Exception as e:
-                result.errors.append(f"J-integral: {e}")
-
-        # Step 6c: Optional phase-field fracture
-        if case.phase_field.enabled:
-            try:
-                logger.info("Stage: phase-field fracture")
-                _apply_phase_field(result, case)
-            except Exception as e:
-                result.errors.append(f"Phase-field fracture: {e}")
-
-        # Step 6d: Digital twin SIF export
-        if case.digital_twin.enabled and case.postprocess.compute_k_factors:
-            try:
-                j_ext = result.extensions.get("j_integral", {})
-                if j_ext:
-                    result.extensions["sif_table"] = {
-                        "K_I": j_ext.get("K_I", 0.0),
-                        "J": j_ext.get("J", 0.0),
-                    }
-            except Exception as e:
-                result.errors.append(f"Digital twin SIF export: {e}")
-
         # Step 7: Probabilistic
         if case.probabilistic.enabled:
             try:
-                logger.info("Stage: probabilistic (n=%d, method=%s)",
-                             case.probabilistic.n_samples, case.probabilistic.method)
                 prob = _run_probabilistic(case, mat_set)
                 result.probabilistic_results = prob
             except Exception as e:
@@ -429,11 +244,6 @@ def run_analysis(case: AnalysisCase) -> WorkflowResult:
 
     except Exception as e:
         result.errors.append(f"Workflow error: {e}")
-
-    if result.errors:
-        logger.warning("Analysis %s completed with %d error(s)", case.name, len(result.errors))
-    else:
-        logger.info("Analysis %s completed successfully", case.name)
 
     return result
 
@@ -566,240 +376,6 @@ def _run_fatigue_assessment(postprocess_results, case):
             fatigue[method] = {"stress_range": stress, "life": life}
 
     return fatigue
-
-
-def _apply_fatigue_uq(
-    result: WorkflowResult,
-    case: AnalysisCase,
-    scatter_std_log10_N: float = 0.2,
-    n_mc: int = 2000,
-    seed: int = 0,
-) -> None:
-    """Augment fatigue_results with lognormal UQ bands around each life."""
-    from feaweld.fatigue.sn_curves import get_sn_curve, life_with_scatter_stress
-
-    if not result.fatigue_results:
-        return
-
-    sn_spec = case.postprocess.sn_curve
-    if "_" in sn_spec:
-        parts = sn_spec.split("_", 1)
-        curve = get_sn_curve(parts[0].lower(), parts[1])
-    else:
-        curve = get_sn_curve("iiw", sn_spec)
-
-    for method, entry in result.fatigue_results.items():
-        if not isinstance(entry, dict):
-            continue
-        if "stress_range" not in entry or "life" not in entry:
-            continue
-        stress_mean = float(entry["stress_range"])
-        if stress_mean <= 0:
-            continue
-        stress_std = 0.05 * stress_mean
-        band = life_with_scatter_stress(
-            curve,
-            stress_mean=stress_mean,
-            stress_std=stress_std,
-            scatter_std_log10_N=scatter_std_log10_N,
-            n_samples=n_mc,
-            seed=seed,
-        )
-        entry["mean"] = band["mean"]
-        entry["std"] = band["std"]
-        entry["p05"] = band["p05"]
-        entry["p95"] = band["p95"]
-
-    result.extensions["uq"] = {
-        "scatter_std_log10_N": scatter_std_log10_N,
-        "n_mc": n_mc,
-    }
-
-
-def _apply_defect_population(
-    result: WorkflowResult, case: AnalysisCase
-) -> None:
-    """Sample (or pass through) a defect population and record it.
-
-    MVP: no Gmsh-level insertion — we merely capture the list on
-    ``result.extensions["defects"]`` so downstream consumers (reports,
-    fatigue knockdown helpers, CLI) can inspect it.
-    """
-    defects: list = []
-    if case.defects.explicit_defects:
-        # Explicit dict form: we don't reconstruct concrete classes for the
-        # MVP — just carry the dicts through so the population count is
-        # non-zero and reports can render them verbatim.
-        defects = list(case.defects.explicit_defects)
-        result.extensions["defects"] = {
-            "population": defects,
-            "count": len(defects),
-            "source": "explicit",
-        }
-        return
-
-    from feaweld.defects.population import sample_iso5817_population
-
-    level = case.defects.quality_level
-    sampled = sample_iso5817_population(
-        level=level,
-        weld_length=case.defects.weld_length,
-        weld_width=case.defects.weld_width,
-        plate_thickness=case.geometry.base_thickness,
-        seed=case.defects.population_seed,
-    )
-    result.extensions["defects"] = {
-        "population": [d.description() for d in sampled],
-        "count": len(sampled),
-        "source": "sampled",
-        "standard": case.defects.standard,
-        "quality_level": level,
-    }
-
-
-def _load_weld_sequence(case: AnalysisCase):
-    """Load a WeldSequence from the bundled data registry."""
-    sequence_name = case.multipass.sequence_name
-    if not sequence_name:
-        return None
-    from feaweld.data.registry import DataRegistry
-    from feaweld.core.types import WeldPass, WeldSequence
-    import json
-    reg = DataRegistry()
-    key = f"multipass_sequences/{sequence_name}"
-    try:
-        path = reg.get_dataset_path(key)
-    except KeyError:
-        return None
-    with path.open("r", encoding="utf-8") as fh:
-        data = json.load(fh)
-    passes = [WeldPass(**p) for p in data.get("passes", [])]
-    return WeldSequence(
-        passes=passes,
-        preheat_temp=case.multipass.preheat_temp,
-        interpass_temp_max=case.multipass.interpass_temp_max,
-    )
-
-
-def _apply_multipass_metadata(
-    result: WorkflowResult, case: AnalysisCase
-) -> None:
-    """Load a named multipass sequence JSON and stash summary metadata."""
-    seq = _load_weld_sequence(case)
-    if seq is None:
-        result.extensions["multipass"] = {
-            "sequence_name": case.multipass.sequence_name,
-            "n_passes": 0, "total_duration": 0.0, "status": "sequence_not_found",
-        }
-        return
-    result.extensions["multipass"] = {
-        "sequence_name": case.multipass.sequence_name,
-        "n_passes": len(seq.passes),
-        "total_duration": seq.total_duration(),
-    }
-
-
-def _apply_multiaxial_criterion(
-    result: WorkflowResult, case: AnalysisCase
-) -> None:
-    """Run a single multi-axial fatigue criterion over the FEA stress field."""
-    fea = result.fea_results
-    if fea is None or fea.stress is None:
-        return
-
-    from feaweld.postprocess import multiaxial as mx
-
-    criterion_map = {
-        "findley": mx.findley_criterion,
-        "dang_van": mx.dang_van_criterion,
-        "sines": mx.sines_criterion,
-        "crossland": mx.crossland_criterion,
-        "fatemi_socie": mx.fatemi_socie_criterion,
-        "mcdiarmid": mx.mcdiarmid_criterion,
-    }
-    name = case.postprocess.multiaxial_criterion
-    fn = criterion_map.get(name)
-    if fn is None:
-        return
-
-    # Treat current stress field as a single-timestep history.  Aggregate by
-    # picking the node with the largest damage-parameter contribution — for
-    # MVP we iterate over nodes and keep the worst.
-    values = np.asarray(fea.stress.values, dtype=float)  # (n_nodes, 6)
-    best_damage = -np.inf
-    best_normal = np.zeros(3)
-    for i in range(values.shape[0]):
-        history = values[i].reshape(1, 6)
-        try:
-            res = fn(history)
-        except Exception:
-            continue
-        if res.damage_parameter > best_damage:
-            best_damage = float(res.damage_parameter)
-            best_normal = np.asarray(res.critical_plane_normal, dtype=float)
-    if not np.isfinite(best_damage):
-        return
-    result.extensions["multiaxial_fatigue"] = {
-        "criterion": name,
-        "damage_parameter": best_damage,
-        "critical_plane_normal": best_normal.tolist(),
-    }
-
-
-def _apply_j_integral(
-    result: WorkflowResult, case: AnalysisCase
-) -> None:
-    """Run a 2D J-integral at the von-Mises peak as a crack-tip proxy."""
-    fea = result.fea_results
-    if fea is None or fea.stress is None:
-        return
-    mesh = fea.mesh
-    if mesh is None or mesh.element_type != ElementType.TRI3:
-        return
-
-    from feaweld.fracture.j_integral import j_integral_2d
-
-    vm = fea.stress.von_mises
-    tip_idx = int(np.argmax(vm))
-    tip = np.asarray(mesh.nodes[tip_idx, :2], dtype=float)
-
-    j_result = j_integral_2d(
-        fea_results=fea,
-        crack_tip=tip,
-        q_function_radius=2.0,
-    )
-    result.extensions["j_integral"] = {
-        "J": float(j_result.J_value),
-        "K_I": float(j_result.K_I),
-    }
-
-
-def _apply_phase_field(result: WorkflowResult, case: AnalysisCase) -> None:
-    """Run phase-field fracture and store results in extensions."""
-    from feaweld.fracture.phase_field import (
-        PhaseFieldConfig, solve_phase_field, EnergyDecomposition,
-    )
-    mesh = result.mesh
-    if mesh is None:
-        return
-    pf_cfg = case.phase_field
-    config = PhaseFieldConfig(
-        l0=pf_cfg.l0, Gc=pf_cfg.Gc, n_load_steps=pf_cfg.n_load_steps,
-        max_load=pf_cfg.max_load, staggered_tol=pf_cfg.staggered_tol,
-        max_staggered_iters=pf_cfg.max_staggered_iters,
-        min_mesh_ratio=pf_cfg.min_mesh_ratio,
-        energy_split=EnergyDecomposition(pf_cfg.energy_split),
-    )
-    from feaweld.core.materials import load_material
-    material = load_material(case.material.base_metal)
-    load_case_obj = _build_load_case(case.load, mesh)
-    fracture_result = solve_phase_field(mesh, material, load_case_obj, config)
-    result.extensions["phase_field"] = {
-        "converged": fracture_result.converged,
-        "max_damage": float(fracture_result.damage.max()),
-        "reaction_force": fracture_result.reaction_force,
-        "metadata": fracture_result.metadata,
-    }
 
 
 def _run_probabilistic(case, mat_set):

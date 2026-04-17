@@ -10,12 +10,9 @@ Implements grain-scale constitutive relationships:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 
 import numpy as np
 from numpy.typing import NDArray
-
-from feaweld.multiscale.fft_homogenization import fft_homogenize
 
 
 @dataclass
@@ -218,50 +215,6 @@ def estimate_grain_size_from_cooling(
     d_ref = initial_austenite_grain_um * 0.6
     rate_ref = 1.0
     return float(d_ref * np.sqrt(rate_ref / max(cooling_rate, 0.01)))
-
-
-def homogenized_stiffness_from_rve(rve_path: str | Path) -> NDArray[np.float64]:
-    """Load a voxel RVE from a ``.npz`` archive and FFT-homogenize it.
-
-    The archive must contain:
-        - ``phase_map``: integer array of shape (Nx, Ny, Nz)
-        - ``phase_stiffness``: either a dict-like ``.npz`` member or a
-          structured array mapping integer phase ids to 6x6 Voigt stiffnesses.
-          The simplest supported layout is a stacked array of shape
-          ``(n_phases, 6, 6)`` together with a ``phase_ids`` vector giving the
-          phase id for each row.
-
-    Returns:
-        Effective 6x6 Voigt stiffness tensor (MPa).
-    """
-    path = Path(rve_path)
-    with np.load(path, allow_pickle=True) as data:
-        phase_map = np.asarray(data["phase_map"], dtype=np.int_)
-        if "phase_ids" in data.files:
-            ids = np.asarray(data["phase_ids"], dtype=np.int_)
-            stack = np.asarray(data["phase_stiffness"], dtype=np.float64)
-            if stack.ndim != 3 or stack.shape[1:] != (6, 6):
-                raise ValueError(
-                    f"phase_stiffness must be (n_phases, 6, 6), got {stack.shape}"
-                )
-            if ids.shape[0] != stack.shape[0]:
-                raise ValueError("phase_ids and phase_stiffness length mismatch")
-            phase_stiffness = {int(pid): stack[k] for k, pid in enumerate(ids)}
-        else:
-            raw = data["phase_stiffness"]
-            if raw.dtype == object:
-                mapping = raw.item()
-                phase_stiffness = {
-                    int(pid): np.asarray(C, dtype=np.float64) for pid, C in mapping.items()
-                }
-            else:
-                stack = np.asarray(raw, dtype=np.float64)
-                if stack.ndim != 3 or stack.shape[1:] != (6, 6):
-                    raise ValueError(
-                        f"phase_stiffness must be (n_phases, 6, 6), got {stack.shape}"
-                    )
-                phase_stiffness = {k: stack[k] for k in range(stack.shape[0])}
-    return fft_homogenize(phase_map, phase_stiffness)
 
 
 def phase_dependent_elastic_modulus(

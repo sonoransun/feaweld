@@ -391,3 +391,129 @@ class TestReportFigures:
         wf = WorkflowResult(case=AnalysisCase(name="empty"))
         figures = generate_report_figures(wf)
         assert isinstance(figures, dict)
+
+
+# ---------------------------------------------------------------------------
+# Tests: Rainflow histogram
+# ---------------------------------------------------------------------------
+
+class TestRainflowHistogram:
+    def _cycles(self):
+        # Synthetic cycles: mix of ranges/means/counts.
+        return [
+            (50.0, 10.0, 1.0),
+            (80.0, 20.0, 1.0),
+            (120.0, 30.0, 0.5),
+            (60.0, 15.0, 1.0),
+            (100.0, 25.0, 1.0),
+            (40.0, 5.0, 1.0),
+        ]
+
+    def test_rainflow_histogram_range(self):
+        from feaweld.visualization.fatigue_plots import plot_rainflow_histogram
+        fig = plot_rainflow_histogram(self._cycles(), bins=5, kind="range", show=False)
+        assert isinstance(fig, plt.Figure)
+        plt.close(fig)
+
+    def test_rainflow_histogram_range_mean(self):
+        from feaweld.visualization.fatigue_plots import plot_rainflow_histogram
+        fig = plot_rainflow_histogram(self._cycles(), bins=4, kind="range_mean", show=False)
+        assert isinstance(fig, plt.Figure)
+        plt.close(fig)
+
+    def test_rainflow_histogram_from_to(self):
+        from feaweld.visualization.fatigue_plots import plot_rainflow_histogram
+        fig = plot_rainflow_histogram(self._cycles(), bins=4, kind="from_to", show=False)
+        assert isinstance(fig, plt.Figure)
+        plt.close(fig)
+
+    def test_rainflow_histogram_empty(self):
+        from feaweld.visualization.fatigue_plots import plot_rainflow_histogram
+        fig = plot_rainflow_histogram([], bins=10, show=False)
+        assert isinstance(fig, plt.Figure)
+        plt.close(fig)
+
+    def test_rainflow_histogram_invalid_kind(self):
+        from feaweld.visualization.fatigue_plots import plot_rainflow_histogram
+        with pytest.raises(ValueError):
+            plot_rainflow_histogram(self._cycles(), kind="nonsense", show=False)
+
+    def test_plot_sn_damage_stacked(self):
+        from feaweld.visualization.fatigue_plots import plot_sn_damage_stacked
+        fig = plot_sn_damage_stacked(
+            self._cycles(), _make_sn_curve(), bins=5, show=False,
+        )
+        assert isinstance(fig, plt.Figure)
+        plt.close(fig)
+
+
+# ---------------------------------------------------------------------------
+# Tests: Mesh convergence plot
+# ---------------------------------------------------------------------------
+
+class TestConvergencePlot:
+    def test_convergence_plot_from_result(self):
+        from feaweld.singularity.convergence import convergence_study
+        from feaweld.visualization.plots_2d import plot_mesh_convergence
+
+        # Synthetic monotonic convergence: f(h) = f_inf + k h^p
+        sizes = [0.5, 1.0, 2.0]
+        f_inf, k, p = 100.0, 5.0, 2.0
+        values = [f_inf + k * (h ** p) for h in sizes]  # finest → coarsest
+        result = convergence_study(values, sizes)
+        fig = plot_mesh_convergence(
+            result, quantity_label="max stress (MPa)", show=False,
+        )
+        assert isinstance(fig, plt.Figure)
+        plt.close(fig)
+
+
+# ---------------------------------------------------------------------------
+# Tests: Plotly interactive figures
+# ---------------------------------------------------------------------------
+
+
+class TestPlotlyFigures:
+    def test_stress_histogram_plotly(self):
+        pytest.importorskip("plotly")
+        from feaweld.visualization.plotly_figures import stress_histogram_plotly
+        fig = stress_histogram_plotly(np.linspace(10, 200, 50))
+        html = fig.to_html(include_plotlyjs=False, full_html=False)
+        assert "<div" in html and "plotly" in html.lower()
+
+    def test_sn_curve_plotly(self):
+        pytest.importorskip("plotly")
+        from feaweld.visualization.plotly_figures import sn_curve_plotly
+        fig = sn_curve_plotly(_make_sn_curve(), operating_point=(90.0, 1e6))
+        html = fig.to_html(include_plotlyjs=False, full_html=False)
+        assert "Operating point" in html
+
+    def test_rainflow_plotly(self):
+        pytest.importorskip("plotly")
+        from feaweld.visualization.plotly_figures import rainflow_plotly
+        fig = rainflow_plotly([(50.0, 0.0, 1.0), (80.0, 0.0, 0.5)], bins=4)
+        html = fig.to_html(include_plotlyjs=False, full_html=False)
+        assert "<div" in html
+
+    def test_interactive_report_contains_plotly_div(self, tmp_path):
+        pytest.importorskip("plotly")
+        from feaweld.pipeline.workflow import AnalysisCase, WorkflowResult, PostProcessConfig
+        from feaweld.pipeline.report import generate_report
+
+        mesh = _make_mesh()
+        stress = _make_stress(mesh.n_nodes)
+        case = AnalysisCase(
+            name="test_interactive",
+            postprocess=PostProcessConfig(sn_curve="IIW_FAT90"),
+            output_dir=str(tmp_path),
+        )
+        wf = WorkflowResult(
+            case=case, mesh=mesh,
+            fea_results=FEAResults(mesh=mesh, stress=stress),
+        )
+
+        path = generate_report(wf, interactive=True)
+        html_text = open(path).read()
+        assert "plotly" in html_text.lower()
+        # CDN script was injected exactly once
+        assert html_text.count("cdn.plot.ly") == 1

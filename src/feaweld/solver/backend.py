@@ -78,7 +78,6 @@ class SolverBackend(ABC):
         load_case: LoadCase,
         time_steps: NDArray,
         heat_source: object | None = None,
-        initial_temperature: NDArray | None = None,
     ) -> FEAResults:
         """Transient thermal analysis.
 
@@ -94,9 +93,6 @@ class SolverBackend(ABC):
             Array of time values (s) at which to solve.
         heat_source : object or None
             Optional moving heat source (e.g. GoldakHeatSource).
-        initial_temperature : NDArray or None
-            Optional ``(n_nodes,)`` initial temperature field.  If *None*,
-            a uniform 20 C ambient is assumed.
 
         Returns
         -------
@@ -141,8 +137,8 @@ def get_backend(preference: str = "auto") -> SolverBackend:
     Parameters
     ----------
     preference : str
-        Backend name: ``"fenics"``, ``"calculix"``, ``"jax"``, ``"neural"``,
-        or ``"auto"``. ``"auto"`` tries FEniCSx first, then CalculiX, then JAX.
+        Backend name: ``"fenics"``, ``"calculix"``, or ``"auto"``.
+        ``"auto"`` tries FEniCSx first, then CalculiX.
 
     Returns
     -------
@@ -162,14 +158,6 @@ def get_backend(preference: str = "auto") -> SolverBackend:
         from feaweld.solver.calculix_backend import CalculiXBackend
         return CalculiXBackend()
 
-    if preference == "jax":
-        from feaweld.solver.jax_backend import JAXBackend
-        return JAXBackend()
-
-    if preference == "neural":
-        from feaweld.solver.neural_backend import NeuralBackend
-        return NeuralBackend()
-
     # auto: try FEniCSx first
     try:
         from feaweld.solver.fenics_backend import FEniCSBackend
@@ -185,14 +173,7 @@ def get_backend(preference: str = "auto") -> SolverBackend:
     except ImportError:
         pass
 
-    try:
-        from feaweld.solver.jax_backend import JAXBackend
-        return JAXBackend()
-    except ImportError:
-        pass
-
     raise ImportError(
-        "No FEA solver backend available. Install fenics-dolfinx, CalculiX (ccx), "
-        "or JAX. See https://fenicsproject.org, https://www.calculix.de, or "
-        "https://jax.readthedocs.io for installation."
+        "No FEA solver backend available. Install fenics-dolfinx or CalculiX (ccx). "
+        "See https://fenicsproject.org or https://www.calculix.de for installation."
     )

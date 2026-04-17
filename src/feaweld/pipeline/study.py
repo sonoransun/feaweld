@@ -8,7 +8,6 @@ for comparison.
 from __future__ import annotations
 
 import itertools
-import multiprocessing
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -227,10 +226,7 @@ class Study:
                     errors[name] = str(e)
                 callback(name, completed, total)
         else:
-            # Use 'spawn' context to avoid fork-safety issues with MPI
-            # (FEniCSx uses MPI.COMM_WORLD internally).
-            ctx = multiprocessing.get_context("spawn")
-            with ProcessPoolExecutor(max_workers=max_workers, mp_context=ctx) as executor:
+            with ProcessPoolExecutor(max_workers=max_workers) as executor:
                 future_to_name = {
                     executor.submit(_run_single_case, case): name
                     for name, case in case_dict.items()

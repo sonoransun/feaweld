@@ -1,5 +1,10 @@
-# Pipeline
+# pipeline
 
-The `AnalysisCase` pydantic configuration tree, `run_analysis()` orchestrator, and `WorkflowResult` container. This is the main entry point for programmatic use of feaweld.
+Workflow orchestration, parametric studies, and HTML report generation.
 
-::: feaweld.pipeline.workflow
+- `workflow` — `AnalysisCase` Pydantic model and the `run_analysis()` orchestrator.
+- `study` — `Study` class, grid and one-at-a-time sweeps, `ProcessPoolExecutor` parallelism.
+- `comparison` — multi-case delta tables and sensitivity plots.
+- `report` — Jinja2 HTML report with embedded (static or Plotly-interactive) figures.
+
+::: feaweld.pipeline

@@ -450,15 +450,6 @@ class CalculiXBackend(SolverBackend):
     ) -> None:
         self._ccx_path = ccx_path
         self._work_dir = Path(work_dir) if work_dir else None
-        # Honour FEAWELD_TMPDIR for scratch files (e.g. tmpfs mount).
-        self._tmpdir: str | None = os.environ.get("FEAWELD_TMPDIR")
-
-    def _scratch_dir(self) -> Path:
-        """Return a fresh temporary directory for .inp / .frd files."""
-        if self._work_dir:
-            return self._work_dir
-        base = self._tmpdir or tempfile.gettempdir()
-        return Path(tempfile.mkdtemp(prefix="feaweld_ccx_", dir=base))
 
     def _get_ccx(self) -> str:
         if self._ccx_path is not None:
@@ -505,8 +496,31 @@ class CalculiXBackend(SolverBackend):
         load_case: LoadCase,
         temperature: float = 20.0,
     ) -> FEAResults:
-        """Static mechanical solve using CalculiX."""
-        work = self._scratch_dir()
+        """Static mechanical solve using CalculiX.
+
+        Writes an Abaqus-format .inp file, invokes ``ccx``, and parses the
+        resulting .frd output into a solver-agnostic
+        :class:`~feaweld.core.types.FEAResults`.
+
+        Parameters
+        ----------
+        mesh : FEMesh
+            Finite element mesh.
+        material : Material
+            Temperature-dependent material.
+        load_case : LoadCase
+            Mechanical loads and constraints.
+        temperature : float
+            Uniform temperature for property evaluation (C).
+
+        Returns
+        -------
+        FEAResults
+            Nodal displacements, stresses, and strains. The
+            ``metadata`` dict includes paths to the generated .inp
+            and .frd files.
+        """
+        work = self._work_dir or Path(tempfile.mkdtemp(prefix="feaweld_ccx_"))
         inp_path = work / "model.inp"
 
         generate_inp(
@@ -546,8 +560,20 @@ class CalculiXBackend(SolverBackend):
         material: Material,
         load_case: LoadCase,
     ) -> FEAResults:
-        """Steady-state thermal solve using CalculiX."""
-        work = self._scratch_dir()
+        """Steady-state thermal solve using CalculiX.
+
+        Parameters
+        ----------
+        mesh, material, load_case
+            See :meth:`SolverBackend.solve_thermal_steady`.
+
+        Returns
+        -------
+        FEAResults
+            Nodal temperature field. Falls back to 20 C at every node
+            if CalculiX produced no temperature output.
+        """
+        work = self._work_dir or Path(tempfile.mkdtemp(prefix="feaweld_ccx_"))
         inp_path = work / "thermal_steady.inp"
 
         generate_inp(
@@ -582,7 +608,6 @@ class CalculiXBackend(SolverBackend):
         load_case: LoadCase,
         time_steps: NDArray,
         heat_source: object | None = None,
-        initial_temperature: NDArray | None = None,
     ) -> FEAResults:
         """Transient thermal solve using CalculiX.
 
@@ -593,7 +618,7 @@ class CalculiXBackend(SolverBackend):
         backend.
         """
         time_steps = np.asarray(time_steps, dtype=np.float64)
-        work = self._scratch_dir()
+        work = self._work_dir or Path(tempfile.mkdtemp(prefix="feaweld_ccx_"))
         inp_path = work / "thermal_transient.inp"
 
         generate_inp(
@@ -647,7 +672,17 @@ class CalculiXBackend(SolverBackend):
         thermal_lc: LoadCase,
         time_steps: NDArray,
     ) -> FEAResults:
-        """Sequential thermomechanical coupling via CalculiX."""
+        """Sequential thermomechanical coupling via CalculiX.
+
+        Delegates to :func:`feaweld.solver.thermomechanical.sequential_coupled_solve`,
+        which alternates a thermal solve and a mechanical solve at each
+        time step (one-way coupling: temperature drives thermal strain).
+
+        Parameters
+        ----------
+        mesh, material, mechanical_lc, thermal_lc, time_steps
+            See :meth:`SolverBackend.solve_coupled`.
+        """
         from feaweld.solver.thermomechanical import sequential_coupled_solve
 
         return sequential_coupled_solve(

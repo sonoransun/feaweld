@@ -196,3 +196,49 @@ class TestPlotFunctions:
         damage = np.random.default_rng(2).uniform(0, 1.5, mesh.n_nodes)
         plotter = plot_damage(mesh, damage, show=False)
         assert plotter is not None
+
+
+class TestGoldakRender:
+    def test_goldak_isosurface_renders(self) -> None:
+        from feaweld.solver.thermal import GoldakHeatSource
+        from feaweld.visualization.thermal_plots import render_goldak_source
+
+        source = GoldakHeatSource(
+            power=4000.0, a_f=5.0, a_r=10.0, b=4.0, c=3.0,
+            travel_speed=5.0,
+            start_position=np.array([0.0, 0.0, 0.0]),
+            direction=np.array([1.0, 0.0, 0.0]),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "goldak.png")
+            plotter = render_goldak_source(
+                source, t=2.0, grid_points=18,
+                show=False, screenshot=out,
+            )
+            assert plotter is not None
+            assert os.path.exists(out)
+            assert os.path.getsize(out) > 0
+
+
+class TestDamageAnimation:
+    def test_damage_animation_gif_writes(self) -> None:
+        matplotlib = pytest.importorskip("matplotlib")
+        from feaweld.visualization.fatigue_plots import animate_damage_evolution
+        from feaweld.core.types import SNCurve, SNSegment, SNStandard
+
+        sn = SNCurve(
+            name="TestFAT90",
+            standard=SNStandard.IIW,
+            segments=[SNSegment(m=3.0, C=90.0**3 * 2e6, stress_threshold=0.0)],
+            cutoff_cycles=1e7,
+        )
+        blocks = [
+            [(50.0, 0.0, 100.0)],
+            [(80.0, 0.0, 50.0)],
+            [(120.0, 0.0, 20.0)],
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "damage.gif")
+            path = animate_damage_evolution(blocks, sn, out, fps=5)
+            assert os.path.exists(str(path))
+            assert os.path.getsize(str(path)) > 0

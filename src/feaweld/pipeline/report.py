@@ -18,6 +18,7 @@ REPORT_TEMPLATE = """<!DOCTYPE html>
 <head>
     <meta charset="utf-8">
     <title>feaweld Analysis Report - {{ title }}</title>
+    {{ plotly_js }}
     <style>
         body { font-family: 'Segoe UI', Arial, sans-serif; margin: 40px; color: #333; }
         h1 { color: #1a5276; border-bottom: 2px solid #2980b9; padding-bottom: 10px; }
@@ -51,15 +52,29 @@ REPORT_TEMPLATE = """<!DOCTYPE html>
 </html>"""
 
 
-def generate_report(result: WorkflowResult, output_dir: str | Path | None = None) -> str:
+def generate_report(
+    result: WorkflowResult,
+    output_dir: str | Path | None = None,
+    interactive: bool = False,
+) -> str:
     """Generate an HTML report from workflow results.
 
-    Args:
-        result: WorkflowResult from run_analysis
-        output_dir: Directory to write report file (default: result.case.output_dir)
+    Parameters
+    ----------
+    result : WorkflowResult
+        Completed workflow result from :func:`run_analysis`.
+    output_dir : str or Path, optional
+        Directory to write the report file. Defaults to
+        ``result.case.output_dir``.
+    interactive : bool
+        If ``True``, embed Plotly figures (hover / zoom / legend
+        toggle) alongside the static base64 PNGs. The Plotly runtime
+        is loaded once from a CDN. Default ``False``.
 
-    Returns:
-        Path to generated HTML report.
+    Returns
+    -------
+    str
+        Absolute path to the generated HTML report.
     """
     from feaweld import __version__
 
@@ -102,6 +117,23 @@ def generate_report(result: WorkflowResult, output_dir: str | Path | None = None
     except Exception:
         pass  # other errors — don't break report generation
 
+    # Interactive Plotly figures (optional; opt-in via interactive=True)
+    plotly_js = ""
+    if interactive:
+        try:
+            from feaweld.visualization.plotly_figures import generate_interactive_figures
+            interactive_figs = generate_interactive_figures(result)
+            if interactive_figs:
+                plotly_js = (
+                    '<script src="https://cdn.plot.ly/plotly-2.27.0.min.js" '
+                    'charset="utf-8"></script>'
+                )
+                content_parts.append(_section_interactive_figures(interactive_figs))
+        except ImportError:
+            pass  # plotly not available — skip
+        except Exception:
+            pass
+
     # Errors
     if result.errors:
         content_parts.append(_section_errors(result))
@@ -109,6 +141,7 @@ def generate_report(result: WorkflowResult, output_dir: str | Path | None = None
     content = "\n".join(content_parts)
 
     report_html = REPORT_TEMPLATE.replace("{{ title }}", html.escape(result.case.name))
+    report_html = report_html.replace("{{ plotly_js }}", plotly_js)
     report_html = report_html.replace("{{ content }}", content)
     report_html = report_html.replace("{{ version }}", __version__)
     report_html = report_html.replace("{{ timestamp }}", datetime.now().isoformat())
@@ -285,6 +318,31 @@ def _section_figures(figures: dict[str, str]) -> str:
         <h2>Visualizations</h2>
         {dashboard_html}
         {grid_html}
+    </div>
+    """
+
+
+def _section_interactive_figures(figures: dict[str, str]) -> str:
+    """Build HTML section with embedded Plotly figure div fragments."""
+    _CAPTIONS = {
+        "stress_distribution": "Von Mises Stress Distribution (interactive)",
+        "sn_curve": "S-N Fatigue Curve (interactive)",
+        "rainflow": "Rainflow Cycle Histogram (interactive)",
+        "convergence": "Mesh Convergence (interactive)",
+    }
+
+    parts: list[str] = []
+    for key, div in figures.items():
+        caption = _CAPTIONS.get(key, key.replace("_", " ").title())
+        parts.append(
+            f'<div class="figure-full">{div}'
+            f'<div class="figure-caption">{caption}</div></div>'
+        )
+
+    return f"""
+    <div class="section">
+        <h2>Interactive Figures</h2>
+        {''.join(parts)}
     </div>
     """
 

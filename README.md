@@ -93,46 +93,17 @@ The Lazzarin SED method averages strain energy density over a control volume at 
   <img src="docs/images/sed_concept.svg" alt="SED control volume" width="60%">
 </p>
 
-### Pipeline Architecture
-
-The analysis pipeline is modeled as a DAG. Independent stages execute concurrently, and each batch boundary is a checkpoint save point for crash recovery.
-
-```mermaid
-flowchart LR
-    YAML["YAML Case"] --> MAT["Materials"] & DEF["Defects"]
-    MAT --> GEO["Geometry"]
-    GEO --> MESH["Mesh"]
-    MESH --> MP{"Multi-pass?"}
-    MP -- yes --> MPTH["Multi-Pass\nThermal Cycle"]
-    MPTH --> SOLVE["Solver"]
-    MP -- no --> SOLVE
-    SOLVE --> HS["Hotspot"] & DG["Dong"] & LN["Linearization"] & SD["SED"]
-    HS & DG & LN & SD --> FAT["Fatigue"]
-    FAT --> FRAC{"Fracture?"}
-    FRAC -- phase-field --> PF["Phase-Field\nFracture"]
-    FRAC -- J-integral --> JI["J-Integral\nK-Factors"]
-    FRAC -- no --> PROB["Probabilistic"]
-    PF & JI --> PROB
-    JI --> DT{"Digital Twin?"}
-    DT -- yes --> ENKF["EnKF\nAssimilation"]
-    PROB --> RPT["Report"]
-    ENKF --> RPT
-```
-
 ## Key Capabilities
 
 **Structural Analysis**
-- Four FEA solver backends: FEniCSx (nonlinear thermomechanical), CalculiX (standard linear/thermal), JAX (differentiable), and Neural (surrogate)
+- Dual FEA solver backend: FEniCSx (nonlinear thermomechanical) and CalculiX (standard linear/thermal)
 - Five parametric joint types: fillet T-joint, butt weld, lap joint, corner joint, cruciform
 - Goldak double-ellipsoid heat source for welding simulation with element birth-death
 - J2 elastoplastic constitutive model with radial return mapping
 - Norton-Bailey creep for post-weld heat treatment (PWHT) stress relaxation
-- Phase-field brittle fracture (Bourdin/Francfort AT2) on TRI3 and TET4 meshes with Miehe spectral and Amor volumetric-deviatoric energy splits
-- Multi-pass welding thermal cycle solver with element birth-death, interpass cooldown monitoring, and temperature carry-forward between passes
 
 **Fatigue Assessment**
 - Eight post-processing methods: nominal (ASME VIII), hot-spot (IIW Type A/B), Battelle/Dong mesh-insensitive structural stress, effective notch stress (FAT225), strain energy density (Lazzarin), through-thickness linearization, Blodgett hand calculations
-- Six multi-axial fatigue criteria: Findley, Dang Van, Sines, Crossland, Fatemi-Socie, McDiarmid
 - S-N curves: 14 IIW FAT classes, 17 DNV-RP-C203 categories, ASME VIII ferritic/austenitic
 - Rainflow cycle counting (ASTM E1049), Palmgren-Miner cumulative damage, Goodman/Gerber mean stress correction
 - Fatigue knockdown factors for surface finish, size, environment
@@ -144,40 +115,9 @@ flowchart LR
 - HTML reports with embedded base64 figures
 
 **Parametric Studies**
-- Concurrent multi-case execution with spawn-safe `ProcessPoolExecutor`
+- Concurrent multi-case execution via ProcessPoolExecutor
 - Parameter sweeps (grid or one-at-a-time) over loads, materials, mesh refinement
-- Distributed scaling to Dask or Ray clusters for multi-node studies
 - Automated comparison reports with metric tables, delta computation, sensitivity plots
-
-**Digital Twin & Online Monitoring**
-- Multi-state Ensemble Kalman Filter for joint crack-length and Paris-law parameter estimation (state = [a, log(C), m])
-- FEA-informed stress intensity factor interpolation via tabulated J-integral results or handbook formulae with residual stress integration
-- Multi-sensor fusion: ultrasonic, strain-gauge, and ACPD observation operators with configurable noise models
-- Ensemble-based remaining useful life prediction with percentile bounds (p05, p95)
-- MQTT / OPC-UA sensor ingestion with WebSocket dashboard and Bayesian posterior calibration
-
-**Pipeline & Orchestration**
-- DAG-based pipeline execution with concurrent post-processing stage batches
-- Pipeline hooks for pre/post stage callbacks, timing, and memory profiling
-- Checkpoint/restart for crash recovery of long-running analyses
-- SQLite-backed job queue with priority scheduling and worker loop
-- Shared-memory IPC for zero-copy numpy array transfer between study workers
-- Graceful SIGTERM/SIGINT shutdown with partial result serialization
-
-**Deployment & Operations**
-- Docker multi-stage builds and docker-compose stack (feaweld + MQTT broker + optional Grafana/Prometheus)
-- systemd service unit for digital twin daemon with watchdog, cgroups limits, and security hardening
-- Structured logging: console text, JSON lines (containers), systemd journal
-- Resource monitoring via /proc integration and RLIMIT subprocess enforcement
-- Memory-mapped arrays for models that exceed available RAM
-- File watching (inotify) for hot-reload of case YAML files and material databases
-
-**Developer Tooling**
-- Pre-commit hooks (ruff linting + formatting, mypy type checking)
-- GitHub Actions CI with test matrix (Python 3.10-3.12, optional dep profiles)
-- Property-based tests (Hypothesis), benchmark suite (pytest-benchmark)
-- Makefile for common tasks: `make test`, `make lint`, `make typecheck`, `make docs`
-- mkdocs-based API documentation with mkdocstrings
 
 **Reference Data**
 - 49 materials with temperature-dependent properties (carbon steel, stainless, high-strength, pipeline, aluminum, filler metals)
@@ -189,43 +129,6 @@ flowchart LR
 - 82 AWS A5 filler metal classifications with base metal matching
 - 25 weld joint efficiency factors (ASME, AWS, EN)
 
-## CLI Overview
-
-```mermaid
-mindmap
-  root((feaweld))
-    Analysis
-      run
-      validate
-      profile
-    Stress Methods
-      blodgett
-      j-integral
-    Visualization
-      visualize
-      dashboard
-    Mesh
-      mesh generate
-      mesh inspect
-    Studies
-      study run
-      study compare
-      convergence
-      sensitivity
-    Data
-      materials
-      groove-types
-      defects list
-    Export
-      export
-    Digital Twin
-      twin start
-      twin status
-    Job Queue
-      queue submit
-      queue status
-```
-
 ## Quick Start
 
 ```bash
@@ -233,40 +136,17 @@ mindmap
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[viz]"    # core + matplotlib + pyvista
 
-# Validate a case file
-feaweld validate examples/fillet_t_joint.yaml
-
 # Run an analysis from YAML
 feaweld run examples/fillet_t_joint.yaml
 
 # Blodgett hand calculation
 feaweld blodgett -g box --d 100 --b 50 -t 5 -P 50000
 
-# Generate and inspect mesh without solving
-feaweld mesh generate examples/fillet_t_joint.yaml -o mesh.vtk
-feaweld mesh inspect mesh.vtk
+# List available materials
+feaweld materials
 
 # Run a parametric study
 feaweld study run study.yaml -j 4
-
-# Mesh convergence study
-feaweld convergence examples/fillet_t_joint.yaml -n 4
-
-# Single-parameter sensitivity sweep
-feaweld sensitivity examples/fillet_t_joint.yaml --param load.axial_force --range 10000:50000:5
-
-# Export results to CSV
-feaweld export results/stress.vtk --format csv
-
-# Profile per-stage timing
-feaweld profile examples/fillet_t_joint.yaml
-
-# Submit to job queue
-feaweld queue submit examples/fillet_t_joint.yaml -p 1
-feaweld queue status
-
-# Start digital twin daemon
-feaweld twin start --host mqtt.local
 ```
 
 **Programmatic usage:**
@@ -296,169 +176,6 @@ ASME VIII Division 2 stress categorization with gradient utilization display and
   <img src="docs/images/example_asme_check.svg" alt="ASME stress check" width="70%">
 </p>
 
-<!-- ADVANCED_CONCEPTS_START -->
-## Advanced Concepts
-
-feaweld extends well beyond the classical IIW / ASME / DNV workflow. The full
-catalog of advanced concepts — differentiable FEA, phase-field fracture,
-Bayesian surrogates, active learning, multi-pass welding, spline paths,
-volumetric joints, defect populations, multi-axial fatigue, fracture mechanics
-— lives in [docs/CONCEPTS.md](docs/CONCEPTS.md).
-
-### Phase-field fracture (crack propagation)
-
-<p align="center">
-  <img src="docs/animations/phase_field_crack_propagation.gif" alt="Phase field crack propagation" width="80%">
-</p>
-
-#### Phase-field staggered solver algorithm
-
-```mermaid
-sequenceDiagram
-    participant LC as Load Controller
-    participant U as u-step (displacement)
-    participant H as History Field
-    participant D as d-step (damage)
-
-    LC->>LC: Apply load fraction lambda
-    loop Staggered iterations
-        LC->>U: Assemble degraded K_u with g(d) = (1-d)^2 + k
-        U->>U: Solve K_u * u = f(lambda)
-        U->>H: psi = 0.5 * eps^T C eps (or psi_plus via spectral/Amor split)
-        H->>H: H = max(H, psi) — monotone history
-        H->>D: Assemble K_d(H) and f_d(H)
-        D->>D: Solve, clamp d in [0,1], enforce irreversibility
-        D-->>LC: Converged if ||d_new - d_old|| < tol
-    end
-    Note over LC,D: Supports TRI3 (2D) and TET4 (3D) meshes
-    Note over U,H: Energy split: NONE / SPECTRAL / VOLUMETRIC_DEVIATORIC
-```
-
-### Multi-pass welding thermal cycle
-
-<p align="center">
-  <img src="docs/animations/multipass_thermal_cycle.gif" alt="Multipass thermal cycle" width="80%">
-</p>
-
-#### Multi-pass thermal cycle orchestration
-
-```mermaid
-sequenceDiagram
-    participant O as Orchestrator
-    participant BD as Birth-Death
-    participant HS as Masked Heat Source
-    participant B as Solver Backend
-    participant IC as Interpass Check
-
-    O->>O: T = preheat_temp (all nodes)
-    loop Each WeldPass
-        O->>BD: Lookup pass_N elements
-        O->>HS: Wrap Goldak source + birth-death mask
-        O->>B: solve_thermal_transient(initial_temperature=T)
-        B-->>O: Temperature history for this pass
-        O->>O: T = final temperature snapshot
-        alt Not last pass
-            O->>IC: T_max > interpass_temp_max?
-            IC-->>O: Run cooldown (no heat source)
-            O->>B: solve_thermal_transient(heat_source=None, initial_temperature=T)
-            B-->>O: Cooled temperature field
-            O->>O: T = cooled snapshot
-        end
-    end
-    opt Residual stress
-        O->>O: sigma_res = -C : alpha * (T - T_ref)
-    end
-```
-
-### Active learning over parametric studies
-
-<p align="center">
-  <img src="docs/animations/active_learning_convergence.gif" alt="Active learning convergence" width="80%">
-</p>
-
-### EnKF crack-length assimilation
-
-<p align="center">
-  <img src="docs/animations/enkf_crack_tracking.gif" alt="EnKF crack-length tracking" width="80%">
-</p>
-
-#### Multi-state EnKF data flow
-
-```mermaid
-flowchart LR
-    subgraph Sensors
-        US["Ultrasonic\n(crack length)"]
-        SG["Strain Gauge\n(near-tip strain)"]
-        AC["ACPD\n(potential drop)"]
-    end
-
-    subgraph Operators["Observation Operators H(x)"]
-        HU["a"]
-        HS2["dK(a) / E*sqrt(2*pi*r)"]
-        HA["slope * a + intercept"]
-    end
-
-    US --> HU
-    SG --> HS2
-    AC --> HA
-
-    subgraph EnKF["MultiStateCrackEnKF"]
-        direction TB
-        STATE["Ensemble (N x 3)\nstate = a, log(C), m"]
-        PRED["Predict:\nda/dN = exp(logC) * dK(a)^m"]
-        UPD["Update: matrix Kalman gain\nK = P_xy * inv(P_yy + R)"]
-        INF["Adaptive inflation\nif spread collapses"]
-        STATE --> PRED --> UPD --> INF --> STATE
-    end
-
-    HU & HS2 & HA --> UPD
-
-    subgraph SIF["SIF Pipeline"]
-        direction TB
-        TAB["SIFTable\n(from J-integral / handbook)"]
-        RES["K_res(a)\n(Bueckner integral)"]
-        COMB["combined_sif\ndK_eff = K_applied + K_res"]
-        TAB --> COMB
-        RES --> COMB
-    end
-
-    COMB --> PRED
-
-    STATE --> RUL["Remaining Life\nDistribution\n(p05, median, p95)"]
-```
-
-### Solver backend hierarchy
-
-```mermaid
-classDiagram
-    class SolverBackend {
-        <<abstract>>
-        +solve_static(mesh, material, load_case, temperature)
-        +solve_thermal_steady(mesh, material, load_case)
-        +solve_thermal_transient(mesh, material, load_case, time_steps, heat_source, initial_temperature)
-        +solve_coupled(mesh, material, mech_lc, thermal_lc, time_steps)
-    }
-    class FEniCSBackend
-    class CalculiXBackend
-    class JAXBackend
-    class NeuralBackend
-    SolverBackend <|-- FEniCSBackend
-    SolverBackend <|-- CalculiXBackend
-    SolverBackend <|-- JAXBackend
-    SolverBackend <|-- NeuralBackend
-    class JAXConstitutiveModel {
-        <<protocol>>
-        +stress(strain)
-        +tangent(strain)
-    }
-    JAXBackend o-- JAXConstitutiveModel : uses
-```
-
-See [docs/CONCEPTS.md](docs/CONCEPTS.md) for the full index of 8 mermaid
-architecture diagrams, 23 high-resolution concept images, and 9 animations
-covering every advanced feature.
-<!-- ADVANCED_CONCEPTS_END -->
-
 ## Standards Coverage
 
 | Standard | Implementation |
@@ -472,34 +189,10 @@ covering every advanced feature.
 | AWS D1.1 | Weld joint efficiency factors, filler metal matching |
 | Lazzarin (2001) | Strain energy density method with control volume |
 
-## Deployment
-
-feaweld supports containerised deployment with Docker and production monitoring via systemd. See the [deployment guide](docs/deployment.md) for full details.
-
-```mermaid
-flowchart TB
-    subgraph compose["docker-compose"]
-        FW["feaweld"] -->|MQTT| MQ["Mosquitto :1883"]
-        FW --> VOL[("results/")]
-    end
-    subgraph systemd
-        SVC["feaweld-twin.service"] --> TWIN["daemon"]
-        SVC --> JRNL["journald"]
-    end
-    MQ --> TWIN
-    SENSOR["Sensors"] --> MQ
-    TWIN --> WS["WebSocket Dashboard"]
-
-    subgraph monitoring["optional"]
-        PROM["Prometheus"] --> GRAF["Grafana :3000"]
-    end
-    TWIN --> PROM
-```
-
 ## Project Metrics
 
-- 110+ source modules, ~30,000 lines of code
-- 525+ passing tests across 60+ test modules
+- 64 source modules, ~17,700 lines of code
+- 332 passing tests across 18 test modules
 - 49 material databases (7 categories) with temperature-dependent properties
 - 6 JSON reference datasets (SCF, CCT, S-N details, residual stress, filler metals, weld efficiency)
-- 5 joint geometry types, 4 solver backends, 8+ post-processing methods, 6 multi-axial criteria, 3 energy decomposition modes
+- 5 joint geometry types, 2 solver backends, 8 post-processing methods

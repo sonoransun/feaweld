@@ -107,7 +107,23 @@ class FEniCSBackend(SolverBackend):
         load_case: LoadCase,
         temperature: float = 20.0,
     ) -> FEAResults:
-        """Linear elastic static solve using FEniCSx."""
+        """Linear elastic static solve using FEniCSx.
+
+        Assembles a vector-valued elasticity problem with the provided
+        material properties and load case, solves the linear system,
+        and returns nodal displacements plus element-averaged stress
+        and strain.
+
+        Parameters
+        ----------
+        mesh, material, load_case, temperature
+            See :meth:`SolverBackend.solve_static`.
+
+        Raises
+        ------
+        ImportError
+            If ``dolfinx`` is not installed.
+        """
         _require_dolfinx()
 
         import dolfinx
@@ -232,7 +248,17 @@ class FEniCSBackend(SolverBackend):
         material: Material,
         load_case: LoadCase,
     ) -> FEAResults:
-        """Steady-state thermal solve using FEniCSx."""
+        """Steady-state thermal solve using FEniCSx.
+
+        Assembles the steady heat equation ``-∇·(k ∇T) = Q`` with
+        Dirichlet, flux, and convection boundary conditions pulled
+        from ``load_case``.
+
+        Parameters
+        ----------
+        mesh, material, load_case
+            See :meth:`SolverBackend.solve_thermal_steady`.
+        """
         _require_dolfinx()
 
         import dolfinx
@@ -320,9 +346,24 @@ class FEniCSBackend(SolverBackend):
         load_case: LoadCase,
         time_steps: NDArray,
         heat_source: object | None = None,
-        initial_temperature: NDArray | None = None,
     ) -> FEAResults:
-        """Transient thermal solve using backward Euler time stepping."""
+        """Transient thermal solve using backward-Euler time stepping.
+
+        Supports an optional moving heat source (e.g.
+        :class:`~feaweld.solver.thermal.GoldakHeatSource`) that is
+        evaluated at every node and every time step.
+
+        Parameters
+        ----------
+        mesh, material, load_case, time_steps, heat_source
+            See :meth:`SolverBackend.solve_thermal_transient`.
+
+        Returns
+        -------
+        FEAResults
+            ``temperature`` is a ``(n_steps, n_nodes)`` array and
+            ``time_steps`` echoes the input time vector.
+        """
         _require_dolfinx()
 
         import dolfinx
@@ -342,11 +383,7 @@ class FEniCSBackend(SolverBackend):
 
         # Previous temperature
         T_n = dolfinx.fem.Function(V)
-        if initial_temperature is not None:
-            init_t = np.asarray(initial_temperature, dtype=np.float64)
-            T_n.x.array[:len(init_t)] = init_t[:len(T_n.x.array)]
-        else:
-            T_n.x.array[:] = 20.0  # initial condition
+        T_n.x.array[:] = 20.0  # initial condition
 
         # Material properties (use room-temperature values for simplicity;
         # for full nonlinearity, one would iterate within each time step)
@@ -467,7 +504,18 @@ class FEniCSBackend(SolverBackend):
         thermal_lc: LoadCase,
         time_steps: NDArray,
     ) -> FEAResults:
-        """Sequential thermomechanical coupling: thermal first, then mechanical."""
+        """Sequential thermomechanical coupling: thermal first, then mechanical.
+
+        Delegates to :func:`feaweld.solver.thermomechanical.sequential_coupled_solve`,
+        which runs a transient thermal solve at each time step and
+        uses the temperature field as a thermal-strain load on a
+        mechanical solve.
+
+        Parameters
+        ----------
+        mesh, material, mechanical_lc, thermal_lc, time_steps
+            See :meth:`SolverBackend.solve_coupled`.
+        """
         from feaweld.solver.thermomechanical import sequential_coupled_solve
 
         return sequential_coupled_solve(

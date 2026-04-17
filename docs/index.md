@@ -1,75 +1,63 @@
 # feaweld
 
-**Finite Element Analysis for weld joint stress, fatigue, and structural integrity.**
+Finite element analysis toolkit for weld joint stress, fatigue life, and structural integrity assessment.
 
-feaweld is a Python framework that provides a complete analysis pipeline for welded structures -- from geometry and meshing through finite element solving to fatigue life assessment. It is designed for engineers and researchers who need reliable, standards-compliant weld fatigue evaluation with minimal boilerplate.
+![pipeline overview](images/pipeline_overview.svg)
 
-## Key Features
+## Overview
 
-```mermaid
-flowchart LR
-    A["YAML Case"] --> B["Geometry"]
-    B --> C["Mesh"]
-    C --> D{"Solver"}
-    D --> E["FEniCSx"]
-    D --> F["CalculiX"]
-    D --> G["JAX"]
-    D --> H["Neural"]
-    E & F & G & H --> I["Post-Processing"]
-    I --> J["Fatigue"]
-    J --> K["Report"]
-```
+feaweld is a Python package for engineers who need to evaluate welded connections in metal structures. It covers the full analysis workflow from parametric joint geometry and mesh generation through FEA solving, post-processing, fatigue assessment, and visualization — producing HTML reports with embedded engineering figures.
 
-- **Multi-solver backends** -- pluggable FEA solvers including FEniCSx, CalculiX, a differentiable JAX backend, and a neural surrogate backend. The `auto` selector tries each in order so analyses run on whatever is installed.
-- **8 stress extraction methods** -- hot-spot (structural stress), Dong's equilibrium method, through-thickness linearization, nominal stress, Blodgett weld-group hand calculations, strain energy density (SED), notch stress, and multi-axial critical-plane criteria (Findley, Dang Van, Sines, Crossland, Fatemi-Socie, McDiarmid).
-- **Standards-based fatigue assessment** -- S-N curve libraries from IIW, DNV, and ASME with rainflow cycle counting (ASTM E1049), Palmgren-Miner cumulative damage, and 80+ IIW weld detail FAT classifications.
-- **Probabilistic analysis** -- Monte Carlo engine with Latin Hypercube Sampling, lognormal S-N scatter propagation, and ISO 5817 stochastic defect population modeling.
-- **DAG pipeline** -- concurrent stage execution with dependency tracking, [checkpoint/restart](orchestration.md#checkpoint--restart) for crash recovery, and [pipeline hooks](orchestration.md#pipeline-hooks) for custom observability.
-- **Parametric studies** -- grid and one-at-a-time sweeps with concurrent execution, [distributed scaling](orchestration.md#distributed-execution) via Dask or Ray clusters, and a persistent [job queue](orchestration.md#job-queue).
-- **Digital twin integration** -- MQTT and OPC-UA sensor ingestion, Ensemble Kalman Filter crack-length assimilation, Bayesian model updating (emcee), and a [daemon mode](deployment.md#systemd-service) for continuous monitoring.
-- **Deployment ready** -- [Docker and docker-compose](deployment.md#docker-deployment) with MQTT broker, [structured logging](deployment.md#logging-configuration) (text, JSON, systemd journal), resource monitoring, and signal handling.
+The package implements methods from major welding and pressure vessel codes (ASME VIII, IIW, DNV-RP-C203, AWS D1.1, BS 7910, API 579) and ships with a reference database of 49 materials, 80 IIW weld detail categories, S-N curves for three standards, CCT diagrams for 20 steel grades, and parametric SCF data for 10 weld geometries.
 
-## Quick Install
+Analysis cases are defined in YAML and can be run individually or as concurrent parametric studies with automated comparison reporting.
 
-```bash
-pip install feaweld
-```
+Beyond conventional deterministic methods, feaweld includes:
 
-For solver backends and optional modules, see the [Getting Started](getting-started.md) guide.
+- **Probabilistic fatigue** — Monte Carlo with Latin Hypercube Sampling, Sobol sensitivity, FORM reliability.
+- **Machine learning** — Random Forest / XGBoost fatigue predictors with transfer learning.
+- **Multi-scale modeling** — Hall-Petch, dislocation density, CCT interpolation.
+- **Digital twin** — MQTT/OPC-UA sensor ingestion with Bayesian model updating.
 
-## Usage Example
+## Where to start
 
-```python
-from feaweld.pipeline.workflow import load_case, run_analysis
+<div class="grid cards" markdown>
 
-# Load a YAML case definition
-case = load_case("my_joint.yaml")
+-   **[Installation](installation.md)**
 
-# Run the full pipeline: geometry -> mesh -> solve -> postprocess -> fatigue
-result = run_analysis(case)
+    Set up a virtual environment and install the right optional extras.
 
-# Inspect results
-if result.fea_results and result.fea_results.stress:
-    import numpy as np
-    print(f"Max von Mises: {np.max(result.fea_results.stress.von_mises):.1f} MPa")
+-   **[Quickstart](quickstart.md)**
 
-if result.fatigue_results:
-    for method, data in result.fatigue_results.items():
-        if isinstance(data, dict) and "life" in data:
-            print(f"{method}: N = {data['life']:.0f} cycles")
-```
+    Run your first analysis from the CLI in under a minute.
 
-Or from the command line:
+-   **[Tutorials](tutorials/01_yaml_analysis.md)**
 
-```bash
-feaweld run my_joint.yaml -o results/
-```
+    Step-by-step walkthroughs of YAML cases, parametric studies, and custom post-processors.
 
-## What Next?
+-   **[API reference](api/core.md)**
 
-- [Getting Started](getting-started.md) -- installation options and your first analysis
-- [Concepts](CONCEPTS.md) -- architecture diagrams, advanced methods, and visualizations
-- [Orchestration](orchestration.md) -- DAG pipeline, hooks, checkpoint, distributed execution, job queue
-- [Deployment](deployment.md) -- Docker, systemd, logging, environment variables
-- [CLI Reference](cli-reference.md) -- every command and its options
-- [API Reference](api/index.md) -- module-level Python API documentation
+    Auto-generated reference for all 13 sub-packages.
+
+</div>
+
+## Standards coverage
+
+| Standard | Implementation |
+|----------|----------------|
+| ASME VIII Division 2 | Stress categorization, allowable checks, design fatigue curves |
+| IIW-2006-09 / IIW-2008 | 14 FAT classes, 80 weld detail categories, hot-spot stress, effective notch stress |
+| DNV-RP-C203 | 17 S-N curve categories (in-air and seawater) |
+| ASME 2007 Annex 5-C | Battelle/Dong mesh-insensitive structural stress |
+| ASTM E1049 | Rainflow cycle counting |
+| BS 7910 / API 579 | Residual stress through-thickness profiles (Level 1 and 2) |
+| AWS D1.1 | Weld joint efficiency factors, filler metal matching |
+| Lazzarin (2001) | Strain energy density method with control volume |
+
+## Project metrics
+
+- 64 source modules, ~18,000 lines of code
+- 332+ passing tests across 18 test modules
+- 49 material databases with temperature-dependent properties
+- 6 JSON reference datasets
+- 5 joint geometry types, 2 solver backends, 8 post-processing methods

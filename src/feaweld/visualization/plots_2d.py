@@ -933,3 +933,98 @@ def plot_cross_section_stress(
     if show:
         plt.show()
     return fig
+
+
+# ---------------------------------------------------------------------------
+# Mesh convergence (Richardson / GCI)
+# ---------------------------------------------------------------------------
+
+
+def plot_mesh_convergence(
+    result: Any,
+    *,
+    quantity_label: str = "quantity of interest",
+    title: str | None = None,
+    show: bool = True,
+    ax: Any = None,
+):
+    """Plot mesh refinement convergence from a :class:`ConvergenceResult`.
+
+    Produces a log-log plot of the quantity of interest versus element
+    size across the refinement levels, with the Richardson-extrapolated
+    zero-mesh-size value drawn as a horizontal asymptote and the Grid
+    Convergence Index (GCI) band around the finest-mesh value.
+
+    Parameters
+    ----------
+    result : feaweld.singularity.convergence.ConvergenceResult
+        Output of
+        :func:`feaweld.singularity.convergence.convergence_study`.
+    quantity_label : str
+        Label for the y-axis (e.g. ``"max von Mises stress (MPa)"``).
+    title : str, optional
+        Figure title.
+    show : bool
+        Call ``plt.show()`` when ``True``.
+    ax : matplotlib Axes, optional
+        Reuse an existing Axes. A new Figure is created when ``None``.
+
+    Returns
+    -------
+    matplotlib.figure.Figure
+    """
+    from feaweld.visualization.theme import (
+        apply_feaweld_style, FEAWELD_BLUE, FEAWELD_RED, FEAWELD_GREEN,
+    )
+
+    plt = _require_matplotlib()
+    apply_feaweld_style()
+
+    sizes = np.asarray(result.mesh_sizes, dtype=float)
+    values = np.asarray(result.stress_values, dtype=float)
+
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(8, 5))
+    else:
+        fig = ax.figure
+
+    # Data points — coarsest (large size) to finest (small size)
+    ax.plot(sizes, values, marker="o", markersize=7, linewidth=1.6,
+            color=FEAWELD_BLUE, label="FEA result")
+
+    # Richardson-extrapolated zero-mesh-size value
+    extrap = float(result.extrapolated_value)
+    ax.axhline(extrap, color=FEAWELD_GREEN, linestyle="--", linewidth=1.3,
+               label=f"Richardson extrapolation = {extrap:.3g}")
+
+    # GCI band around the finest-mesh value
+    finest_value = values[int(np.argmin(sizes))]
+    gci = float(result.gci)
+    band = abs(finest_value) * gci
+    ax.fill_between(
+        sizes,
+        finest_value - band,
+        finest_value + band,
+        color=FEAWELD_RED, alpha=0.15,
+        label=f"GCI band ±{gci * 100:.1f} %",
+    )
+
+    ax.set_xscale("log")
+    ax.set_xlabel("Element size h (mm)")
+    ax.set_ylabel(quantity_label)
+    ax.invert_xaxis()  # finer meshes at the right
+    ax.grid(True, which="both", alpha=0.3)
+
+    status = "converged" if result.is_converged else "not converged"
+    p = result.convergence_order
+    order_str = f"order p ≈ {p:.2f}" if np.isfinite(p) else "order p → ∞"
+    ax.set_title(
+        title
+        or f"Mesh convergence ({status}, {order_str}, GCI = {gci * 100:.2f} %)"
+    )
+    ax.legend(loc="best")
+
+    fig.tight_layout()
+    if show:
+        plt.show()
+    return fig
