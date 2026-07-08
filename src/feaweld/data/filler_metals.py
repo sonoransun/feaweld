@@ -46,14 +46,20 @@ def _to_filler(entry: dict) -> FillerMetal:
 def get_filler_metal(classification: str) -> FillerMetal:
     """Look up a filler metal by its AWS classification.
 
-    Args:
-        classification: AWS classification (e.g. ``"E7018"``, ``"ER70S-6"``).
+    Parameters
+    ----------
+    classification : str
+        AWS classification (e.g. ``"E7018"``, ``"ER70S-6"``).
 
-    Returns:
+    Returns
+    -------
+    FillerMetal
         FillerMetal dataclass.
 
-    Raises:
-        KeyError: If the classification is not found.
+    Raises
+    ------
+    KeyError
+        If the classification is not found.
     """
     data = get_cache().get("filler_metals/aws_a5")
     for entry in data:
@@ -74,12 +80,18 @@ def list_filler_metals(
 ) -> list[FillerMetal]:
     """List filler metals with optional filtering.
 
-    Args:
-        process: Filter by welding process (e.g. ``"SMAW"``, ``"GMAW"``).
-        aws_spec: Filter by AWS specification (e.g. ``"A5.1"``, ``"A5.18"``).
-        min_tensile_mpa: Minimum tensile strength in MPa.
+    Parameters
+    ----------
+    process : str | None
+        Filter by welding process (e.g. ``"SMAW"``, ``"GMAW"``).
+    aws_spec : str | None
+        Filter by AWS specification (e.g. ``"A5.1"``, ``"A5.18"``).
+    min_tensile_mpa : float | None
+        Minimum tensile strength in MPa.
 
-    Returns:
+    Returns
+    -------
+    list[FillerMetal]
         List of matching FillerMetal entries.
     """
     data = get_cache().get("filler_metals/aws_a5")
@@ -104,11 +116,16 @@ def filler_for_base_metal(
 ) -> list[FillerMetal]:
     """Find filler metals compatible with a given base metal.
 
-    Args:
-        base_metal: Base metal identifier (e.g. ``"A36"``, ``"316SS"``).
-        process: Optionally restrict to a welding process.
+    Parameters
+    ----------
+    base_metal : str
+        Base metal identifier (e.g. ``"A36"``, ``"316SS"``).
+    process : str | None
+        Optionally restrict to a welding process.
 
-    Returns:
+    Returns
+    -------
+    list[FillerMetal]
         List of compatible FillerMetal entries, sorted by tensile strength.
     """
     data = get_cache().get("filler_metals/aws_a5")

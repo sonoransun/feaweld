@@ -123,6 +123,23 @@ fig = plot_cross_section_stress(mesh, stress, y_level=5.0, show=False)
 
 Features: Filled contour with labeled contour line overlay, uses perceptually uniform `turbo` colormap.
 
+### Full Section Stress Contour
+
+`plot_stress_contour_2d` draws a filled contour over an entire planar (2-D)
+section — the quasi-2D meshes feaweld generates at `length: 1.0`. It accepts a
+`FEMesh` and `StressField` directly:
+
+```python
+from feaweld.visualization.plots_2d import plot_stress_contour_2d
+fig = plot_stress_contour_2d(mesh, stress, component="von_mises", show=False)
+```
+
+`component` accepts the same names as the 3-D functions (`von_mises`, `tresca`,
+`xx`, `yy`, `zz`, `xy`, `yz`, `xz`). Triangular meshes are drawn with
+`tricontourf`; other element types fall back to a scatter. This is the Matplotlib
+counterpart to `plot_stress_field` and is what the report's
+`stress_contour_2d` figure uses for planar sections.
+
 ## 3D Plots (PyVista)
 
 All 3D functions return a `pyvista.Plotter` and share:
@@ -130,6 +147,15 @@ All 3D functions return a `pyvista.Plotter` and share:
 ```python
 def plot_*(mesh, stress, component="von_mises", show=True, **kwargs) -> Plotter
 ```
+
+!!! tip "3-D functions accept a raw PyVista grid too"
+    Every 3-D function resolves its input through `resolve_grid(mesh, stress)`,
+    which passes an already-built PyVista grid straight through and only converts
+    an `FEMesh` when needed. So you can hand `plot_stress_field`, `plot_deformed`,
+    or `plot_temperature_field` a grid you loaded with `pyvista.read(...)` — this is
+    exactly how the `feaweld visualize` CLI renders `.vtu` files. Use
+    `resolve_component(name)` to map a friendly component name to the grid's array
+    key.
 
 ### Stress Field
 
@@ -140,12 +166,16 @@ plotter = plot_stress_field(mesh, stress, component="von_mises", show=False)
 
 13 selectable components: `von_mises`, `tresca`, `xx`, `yy`, `zz`, `xy`, `yz`, `xz`, `principal_1`, `principal_2`, `principal_3`. Mesh edges shown automatically for meshes under 50k elements.
 
+![3-D von Mises stress contour](../images/example_3d_stress.png)
+
 ### Deformed Shape
 
 ```python
 from feaweld.visualization.stress_plots import plot_deformed
 plotter = plot_deformed(mesh, displacement, scale=10.0, stress=stress, show=False)
 ```
+
+![Deformed shape coloured by stress](../images/example_3d_deformed.png)
 
 ### Temperature Field
 
@@ -177,6 +207,55 @@ Uses `inferno` colormap (dark-to-bright, heat-intuitive).
 | `plot_damage()` | Miner's cumulative damage | `YlOrRd` (yellow=safe, red=critical) |
 
 Both include text annotations: life plot shows color interpretation guide; damage plot shows failure warning when D >= 1.0.
+
+## Thermal Plots (feaweld.visualization.thermal_plots)
+
+```python
+from feaweld.visualization.thermal_plots import plot_temperature_history, render_goldak_source
+
+# Matplotlib: peak-node temperature vs. time from a transient result
+fig = plot_temperature_history(times, temperatures, node_label="weld toe", show=False)
+
+# PyVista: 3-D iso-surface of a Goldak double-ellipsoid heat source
+plotter = render_goldak_source(source, t=2.0, iso_fraction=0.1, show=False)
+```
+
+`plot_temperature_history` accepts a 1-D temperature history or a 2-D
+`(n_steps, n_nodes)` array (it auto-selects the hottest node). `render_goldak_source`
+backs the `feaweld goldak` CLI command.
+
+## Probabilistic Plots (feaweld.visualization.probabilistic_plots)
+
+Three functions visualize the outputs of the [probabilistic
+analysis](probabilistic.md):
+
+| Function | Input | Purpose |
+|----------|-------|---------|
+| `plot_sobol_indices(indices, kind="bar")` | `{"first_order": {...}, "total": {...}}` | First-order vs. total Sobol indices (`kind="bar"` or `"tornado"`) |
+| `plot_mc_histogram(results, percentiles=..., bins=40)` | array of MC responses | Response histogram with optional CDF overlay |
+| `plot_form_reliability(form_result)` | `{"beta", "probability_of_failure", "design_point"}` | FORM reliability index and design point |
+
+```python
+from feaweld.visualization.probabilistic_plots import plot_sobol_indices, plot_mc_histogram
+
+fig = plot_sobol_indices(mc["sobol"], kind="tornado", show=False)
+fig = plot_mc_histogram(mc["results"], percentiles=[5, 50, 95], show=False)
+```
+
+## Material & Multiscale Plots (feaweld.visualization.material_plots)
+
+| Function | Purpose |
+|----------|---------|
+| `plot_cct_diagram(diagram, grade=..., cooling_rate=...)` | CCT phase fractions vs. cooling rate |
+| `plot_residual_stress_profile(profile, yield_strength=...)` | Through-thickness residual stress |
+| `plot_creep_curve(A, n, m, stress_levels=..., t_end=...)` | Norton-Bailey creep strain over time |
+| `plot_hall_petch(params, grain_size_range=(1, 100), markers=...)` | Hall-Petch yield vs. grain size |
+
+```python
+from feaweld.visualization.material_plots import plot_cct_diagram, plot_hall_petch
+fig = plot_cct_diagram("A36", cooling_rate=30.0, show=False)
+fig = plot_hall_petch(HALL_PETCH_LOW_CARBON_STEEL, markers={"HAZ": 8.4}, show=False)
+```
 
 ## Dashboards
 
@@ -244,17 +323,62 @@ get_cmap("displacement")  # "viridis"
 
 All 2D and 3D functions accept a `cmap` keyword to override the theme default.
 
-## Report Integration
+## Report figures are automatic
 
-Figures are embedded as base64 PNG in HTML reports:
+You do not choose report figures — a **registry** decides which appear based on
+what data is present in the `WorkflowResult`. `report_figures.FIGURE_SPECS` is an
+ordered list of `FigureSpec`s, each with an `available(wf)` predicate and a
+`build(wf)` function. `generate_report_figures(workflow_result)` walks the registry,
+builds every figure whose data gate is satisfied, base64-encodes it, and returns a
+`{key: {b64, caption, layout}}` dict for the report template:
 
 ```python
-from feaweld.visualization.report_figures import generate_report_figures, figure_to_base64
+from feaweld.visualization.report_figures import generate_report_figures
 
-figures = generate_report_figures(workflow_result)  # dict of name -> base64 string
+figures = generate_report_figures(workflow_result)
 ```
 
-The report template automatically arranges individual plots in a 2-column grid with the engineering dashboard at full width.
+Each figure is built in isolation, so a failing one is skipped rather than breaking
+the report; `pyvista`-kind figures are skipped if PyVista is not installed. The
+full registry, in order:
+
+| Figure key | Caption | Appears when |
+|------------|---------|--------------|
+| `mesh_preview` | Finite Element Mesh | a mesh is present |
+| `stress_contour_3d` | Von Mises Stress Contour | stress + mesh present (full width) |
+| `deformed_shape` | Deformed Shape (scaled) | displacement + mesh present |
+| `stress_contour_2d` | Von Mises Stress Contour (section) | stress on a planar (2-D) mesh |
+| `stress_distribution` | Von Mises Stress Distribution | a stress field is present |
+| `temperature_field` | Temperature Field | a temperature field + mesh present |
+| `temperature_history` | Peak-Node Temperature History | a transient temperature history present |
+| `sn_curve` | S-N Fatigue Curve | `postprocess.sn_curve` is set |
+| `dong_decomposition` | Dong Structural Stress Decomposition | a `structural_dong` result present |
+| `hotspot_extrapolation` | Hot-Spot Stress Extrapolation | a hot-spot result with points present |
+| `through_thickness` | Through-Thickness Stress Linearization | a `linearization` result present |
+| `asme_check` | ASME VIII Div 2 Stress Check | a `nominal` categorization present |
+| `weld_group` | Weld Group Geometry | a `blodgett` result present |
+| `rainflow` | Rainflow Cycle Histogram | rainflow cycles present |
+| `fatigue_life_map` | Fatigue Life Map | stress + mesh and `fatigue_assessment` on |
+| `damage_map` | Miner Damage Map | stress + mesh and rainflow cycles present |
+| `mc_histogram` | Monte Carlo Response Distribution | probabilistic results carry a sample array |
+| `sobol_indices` | Sobol Sensitivity Indices | a Sobol result present |
+| `form_reliability` | FORM Reliability (design point) | a FORM result with a `beta` present |
+| `engineering_dashboard` | Engineering Assessment Dashboard | always (full width) |
+
+The template arranges `grid`-layout figures in a 2-column grid and `full`-layout
+figures (the 3-D stress contour and the engineering dashboard) at full width. So
+enabling more `stress_methods`, turning on `fatigue_assessment`, or setting
+`probabilistic.enabled` automatically enriches the report — no figure configuration
+needed.
+
+## Command-line rendering
+
+The `feaweld visualize` command renders a saved `.vtk`/`.vtu` result through this
+same library, so the on-screen colors and annotations match the report. It exposes
+the view modes as flags — `--iso`, `--threshold` (with `--below`), `--clip` (with
+`--clip-origin`), plus `--deformed` and `--annotate` on the plain contour, and
+`--cmap` for a semantic or matplotlib colormap. See the
+[CLI reference](../reference/cli.md#visualize) for the full option list.
 
 ## Export
 

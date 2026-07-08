@@ -78,10 +78,19 @@ def extract_boundary_displacements(
     try:
         from scipy.interpolate import RBFInterpolator  # type: ignore[import-untyped]
 
+        # Drop degenerate axes: planar (quasi-2D) meshes make the RBF
+        # monomial matrix singular if a constant coordinate is included.
+        spans = parent_coords.max(axis=0) - parent_coords.min(axis=0)
+        active = spans > 1e-12
+        if not np.any(active):
+            raise ValueError("Degenerate parent mesh (all nodes coincident)")
+
         # Build one RBF interpolator for all three displacement components.
-        rbf = RBFInterpolator(parent_coords, parent_disp, kernel="thin_plate_spline")
-        return np.asarray(rbf(boundary_nodes), dtype=np.float64)
-    except ImportError:
+        rbf = RBFInterpolator(
+            parent_coords[:, active], parent_disp, kernel="thin_plate_spline"
+        )
+        return np.asarray(rbf(boundary_nodes[:, active]), dtype=np.float64)
+    except (ImportError, ValueError, np.linalg.LinAlgError):
         # Fall back to nearest-neighbour transfer.
         return _nearest_neighbour_transfer(
             parent_coords, parent_disp, boundary_nodes
@@ -147,6 +156,13 @@ class SubmodelSolver:
         Extraction radius.
     refinement_factor:
         How much finer the submodel mesh is compared to the parent.
+    material:
+        Material for the local FE re-solve.  When ``None`` the solve
+        degrades to field interpolation from the parent solution.
+    backend:
+        A [SolverBackend][feaweld.solver.backend.SolverBackend] instance, a
+        backend preference string (``"auto"``, ``"fenics"``,
+        ``"calculix"``), or ``None`` to force the interpolation fallback.
     """
 
     def __init__(
@@ -155,11 +171,15 @@ class SubmodelSolver:
         center: NDArray,
         radius: float,
         refinement_factor: int = 4,
+        material: object | None = None,
+        backend: object | str | None = "auto",
     ) -> None:
         self.parent_results = parent_results
         self.center = np.asarray(center, dtype=np.float64).ravel()
         self.radius = float(radius)
         self.refinement_factor = int(refinement_factor)
+        self.material = material
+        self.backend = backend
 
         # Derived quantities
         self._parent_h = _characteristic_element_size(parent_results.mesh)
@@ -224,7 +244,7 @@ class SubmodelSolver:
         Returns
         -------
         LoadCase
-            A :class:`LoadCase` with displacement boundary conditions.
+            A [LoadCase][feaweld.core.types.LoadCase] with displacement boundary conditions.
         """
         if self._submodel_mesh is None:
             self.create_submodel_mesh()
@@ -251,24 +271,94 @@ class SubmodelSolver:
         )
 
     def solve(self) -> FEAResults:
-        """Solve the submodel.
+        """Solve the submodel with the configured FEA backend.
 
-        This is a simplified linear-elastic solve.  For production use,
-        this would delegate to the configured solver backend.
+        Builds the refined submodel mesh, interpolates cut-boundary
+        displacements from the parent solution, and re-solves the local
+        problem via ``backend.solve_static`` with the interpolated
+        displacements imposed as per-node Dirichlet conditions.
+
+        When no backend/material is available (or the backend solve
+        fails, e.g. the ``ccx`` executable is missing), the parent fields
+        are interpolated onto the submodel mesh instead and a
+        ``RuntimeWarning`` is emitted; ``metadata["submodel_solve"]`` is
+        ``"interpolated"`` in that case, otherwise the backend class name.
 
         Returns
         -------
         FEAResults
             Results on the refined submodel mesh.
         """
+        import warnings
+
         if self._submodel_mesh is None:
             self.create_submodel_mesh()
         assert self._submodel_mesh is not None
+        assert self._boundary_node_ids is not None
 
         load_case = self.apply_boundary_conditions()
 
-        # Placeholder solve: interpolate parent stress onto submodel nodes.
-        # A full solve would assemble and factor the stiffness matrix.
+        backend = self._resolve_backend()
+        if backend is not None and self.material is not None:
+            try:
+                results = backend.solve_static(
+                    self._submodel_mesh, self.material, load_case,
+                    temperature=20.0,
+                )
+            except Exception as exc:
+                warnings.warn(
+                    f"Submodel FE solve failed ({exc}); falling back to "
+                    "field interpolation from the parent solution.",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+            else:
+                # Quality check: solved boundary displacements should
+                # reproduce the imposed cut-boundary values.
+                residual = None
+                if results.displacement is not None and load_case.constraints:
+                    imposed = np.asarray(load_case.constraints[0].values)
+                    solved = results.displacement[self._boundary_node_ids]
+                    ncomp = min(imposed.shape[1], solved.shape[1])
+                    if len(imposed):
+                        residual = float(
+                            np.max(np.abs(solved[:, :ncomp] - imposed[:, :ncomp]))
+                        )
+                results.metadata.update({
+                    "submodel": True,
+                    "parent_mesh_size": self._parent_h,
+                    "submodel_solve": type(backend).__name__,
+                    "boundary_bc_residual": residual,
+                })
+                return results
+        else:
+            warnings.warn(
+                "No FEA backend/material available for the submodel; the "
+                "submodel field is interpolated from the parent solution, "
+                "not re-solved.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+
+        return self._solve_interpolated()
+
+    def _resolve_backend(self):
+        """Resolve the backend option to a SolverBackend instance or None."""
+        backend = self.backend
+        if backend is None or self.material is None:
+            return None
+        if isinstance(backend, str):
+            from feaweld.solver.backend import get_backend
+            try:
+                return get_backend(backend)
+            except ImportError:
+                return None
+        return backend
+
+    def _solve_interpolated(self) -> FEAResults:
+        """Fallback: interpolate parent fields onto the submodel mesh."""
+        assert self._submodel_mesh is not None
+
         sub_disp = extract_boundary_displacements(
             self.parent_results,
             self._submodel_mesh.nodes,
@@ -276,16 +366,13 @@ class SubmodelSolver:
 
         sub_stress: NDArray | None = None
         if self.parent_results.stress is not None:
-            from feaweld.core.types import StressField
-
             parent_stress_vals = self.parent_results.stress.values  # (n_p, 6)
             parent_coords = self.parent_results.mesh.nodes
 
             # Nearest-neighbour stress transfer
-            sub_stress_vals = _nearest_neighbour_transfer(
+            sub_stress = _nearest_neighbour_transfer(
                 parent_coords, parent_stress_vals, self._submodel_mesh.nodes
             )
-            sub_stress = sub_stress_vals
 
         from feaweld.core.types import StressField as _SF
 
@@ -293,8 +380,52 @@ class SubmodelSolver:
             mesh=self._submodel_mesh,
             displacement=sub_disp,
             stress=_SF(values=sub_stress) if sub_stress is not None else None,
-            metadata={"submodel": True, "parent_mesh_size": self._parent_h},
+            metadata={
+                "submodel": True,
+                "parent_mesh_size": self._parent_h,
+                "submodel_solve": "interpolated",
+            },
         )
+
+
+def solve_submodel(
+    parent_results: FEAResults,
+    center: NDArray,
+    radius: float,
+    material: object | None = None,
+    refinement_factor: int = 4,
+    backend: object | str | None = "auto",
+) -> FEAResults:
+    """Convenience wrapper: build and solve a submodel in one call.
+
+    Parameters
+    ----------
+    parent_results:
+        Solved global model (must include displacements).
+    center:
+        Centre of the submodel region, shape ``(3,)``.
+    radius:
+        Extraction radius (mm).
+    material:
+        Material for the local re-solve; ``None`` forces interpolation.
+    refinement_factor:
+        Mesh refinement relative to the parent (default 4).
+    backend:
+        Backend instance, preference string, or ``None``.
+
+    Returns
+    -------
+    FEAResults
+        Results on the refined submodel mesh (see
+        [SubmodelSolver.solve][feaweld.singularity.submodeling.SubmodelSolver.solve] for the metadata contract).
+    """
+    solver = SubmodelSolver(
+        parent_results, center, radius,
+        refinement_factor=refinement_factor,
+        material=material,
+        backend=backend,
+    )
+    return solver.solve()
 
 
 # ---------------------------------------------------------------------------

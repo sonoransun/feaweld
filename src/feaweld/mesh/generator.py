@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 import gmsh
 import numpy as np
 from numpy.typing import NDArray
+from scipy.spatial import cKDTree
 
 from feaweld.core.types import ElementType, FEMesh
 from feaweld.geometry.joints import JointGeometry, _ensure_gmsh_initialized
@@ -147,6 +148,11 @@ def generate_mesh(
     # 5. Extract into FEMesh
     mesh = extract_mesh_from_gmsh(dim=dim)
 
+    # 6. Attach the weld-toe node set.  Gmsh physical groups only tag the
+    #    bottom/top boundaries, so the toe nodes needed by post-processing are
+    #    recovered here from the joint's analytic toe coordinates.
+    _attach_weld_toe_node_set(mesh, toe_points)
+
     if finalize:
         gmsh.finalize()
 
@@ -158,7 +164,7 @@ def generate_mesh(
 # ---------------------------------------------------------------------------
 
 def extract_mesh_from_gmsh(dim: int = 2) -> FEMesh:
-    """Read the current Gmsh model mesh into an :class:`FEMesh`.
+    """Read the current Gmsh model mesh into an [FEMesh][feaweld.core.types.FEMesh].
 
     Must be called while a Gmsh session is active and a mesh has been
     generated.
@@ -249,6 +255,45 @@ def extract_mesh_from_gmsh(dim: int = 2) -> FEMesh:
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+def _attach_weld_toe_node_set(
+    mesh: FEMesh,
+    toe_points: list[tuple[float, float, float]],
+) -> None:
+    """Map a joint's weld-toe coordinates to their nearest mesh nodes.
+
+    Post-processing methods locate the weld toe through the ``"weld_toe"``
+    node set, but Gmsh physical groups only tag ``bottom``/``top``
+    boundaries.  Each analytic toe point is matched to its nearest mesh node
+    via a k-d tree; the resulting node indices are de-duplicated and stored
+    as an ``int64`` array on ``mesh.node_sets["weld_toe"]``.
+
+    Parameters
+    ----------
+    mesh : FEMesh
+        The extracted mesh, modified in place.
+    toe_points : list of tuple of float
+        Weld-toe coordinates from ``JointGeometry.get_weld_toe_points()``.
+        When empty (e.g. some butt configurations) the set is left absent.
+    """
+    if not toe_points:
+        return
+
+    pts = np.asarray(toe_points, dtype=np.float64)
+    if pts.ndim != 2 or pts.shape[0] == 0:
+        return
+
+    # Pad/truncate the toe coordinates to the mesh node dimensionality so the
+    # k-d tree query is well-posed for both 2-D and 3-D meshes.
+    ncol = mesh.nodes.shape[1]
+    if pts.shape[1] < ncol:
+        pts = np.hstack([pts, np.zeros((pts.shape[0], ncol - pts.shape[1]))])
+    elif pts.shape[1] > ncol:
+        pts = pts[:, :ncol]
+
+    _, idx = cKDTree(mesh.nodes).query(pts)
+    mesh.node_sets["weld_toe"] = np.unique(np.asarray(idx, dtype=np.int64))
+
 
 def _apply_size_fields(
     toe_points: list[tuple[float, float, float]],

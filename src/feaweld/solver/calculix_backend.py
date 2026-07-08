@@ -10,6 +10,7 @@ import os
 import struct
 import subprocess
 import tempfile
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -130,12 +131,21 @@ def _write_boundary_conditions(
                 f.write("*BOUNDARY\n")
                 has_boundary = True
             node_set = constraint.node_set
-            if node_set in mesh.node_sets:
+            values = np.asarray(constraint.values)
+            if values.ndim == 2 and node_set in mesh.node_sets:
+                # Per-node prescribed displacements: values row i applies to
+                # node i of the node set (submodel cut-boundary convention).
+                for nid, row in zip(mesh.node_sets[node_set], values):
+                    nid_1 = int(nid) + 1
+                    for dof in range(1, 4):
+                        val = row[dof - 1] if dof - 1 < row.shape[0] else 0.0
+                        f.write(f"{nid_1}, {dof}, {dof}, {val:.10g}\n")
+            elif node_set in mesh.node_sets:
                 # Fix all DOFs for the specified nodes
                 for nid in mesh.node_sets[node_set]:
                     nid_1 = int(nid) + 1
                     for dof in range(1, 4):
-                        val = constraint.values[dof - 1] if dof - 1 < len(constraint.values) else 0.0
+                        val = values[dof - 1] if dof - 1 < len(values) else 0.0
                         f.write(f"{nid_1}, {dof}, {dof}, {val:.10g}\n")
             else:
                 # Use the node set name directly (assumes defined in .inp)
@@ -160,9 +170,19 @@ def _write_boundary_conditions(
         if load_bc.bc_type == LoadType.FORCE:
             f.write("*CLOAD\n")
             node_set = load_bc.node_set
-            mag = load_bc.values[0]
+            values = np.asarray(load_bc.values)
             direction = load_bc.direction
-            if direction is not None:
+            if values.ndim == 2 and node_set in mesh.node_sets:
+                # Per-node force vectors: values row i applies to node i of
+                # the node set (e.g. moment couples from
+                # feaweld.core.loads.moment_to_nodal_forces).
+                for nid, row in zip(mesh.node_sets[node_set], values):
+                    for dof in range(1, min(4, row.shape[0] + 1)):
+                        component = row[dof - 1]
+                        if abs(component) > 1e-30:
+                            f.write(f"{int(nid) + 1}, {dof}, {component:.10g}\n")
+            elif direction is not None:
+                mag = values[0]
                 for dof in range(1, 4):
                     component = mag * direction[dof - 1]
                     if abs(component) > 1e-30:
@@ -173,21 +193,83 @@ def _write_boundary_conditions(
                             f.write(f"{node_set}, {dof}, {component:.10g}\n")
             else:
                 # Apply as magnitude in DOF 1 by default
+                mag = values[0]
                 if node_set in mesh.node_sets:
                     for nid in mesh.node_sets[node_set]:
                         f.write(f"{int(nid) + 1}, 1, {mag:.10g}\n")
                 else:
                     f.write(f"{node_set}, 1, {mag:.10g}\n")
 
+        elif load_bc.bc_type == LoadType.TEMPERATURE and analysis == "static":
+            # Prescribed temperature field for thermal-stress loading.
+            # Scalar values apply uniformly; per-node arrays map onto the
+            # node set (or all nodes when the array spans the whole mesh).
+            f.write("*TEMPERATURE\n")
+            values = np.asarray(load_bc.values, dtype=np.float64).ravel()
+            node_set = load_bc.node_set
+            if values.shape[0] == mesh.n_nodes:
+                for nid in range(mesh.n_nodes):
+                    f.write(f"{nid + 1}, {values[nid]:.6g}\n")
+            elif node_set in mesh.node_sets and values.shape[0] == len(mesh.node_sets[node_set]):
+                for nid, T_val in zip(mesh.node_sets[node_set], values):
+                    f.write(f"{int(nid) + 1}, {T_val:.6g}\n")
+            elif node_set in mesh.node_sets and values.shape[0] == 1:
+                for nid in mesh.node_sets[node_set]:
+                    f.write(f"{int(nid) + 1}, {values[0]:.6g}\n")
+            else:
+                # Uniform temperature over the whole mesh (no NSET named
+                # "all" is guaranteed to exist, so write per node).
+                for nid in range(mesh.n_nodes):
+                    f.write(f"{nid + 1}, {values[0]:.6g}\n")
+
         elif load_bc.bc_type == LoadType.PRESSURE:
+            warnings.warn(
+                "CalculiX *DLOAD on solid (C3D*) elements requires an "
+                "element-face label (P1..P6); this card writes 'ALL, P, ...', "
+                "applying the pressure to ALL elements regardless of "
+                f"node_set '{load_bc.node_set}', which ccx may reject.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            f.write(
+                "** NOTE: pressure applied to ALL elements without a face "
+                "label (P1..P6); node_set is ignored and ccx may require "
+                "explicit element faces for solid elements.\n"
+            )
             f.write("*DLOAD\n")
             f.write(f"ALL, P, {load_bc.values[0]:.10g}\n")
 
         elif load_bc.bc_type == LoadType.HEAT_FLUX:
+            warnings.warn(
+                "CalculiX *DFLUX on solid (C3D*) elements requires an "
+                "element-face label (S1..S6); this card writes 'ALL, S, ...', "
+                "applying the flux to ALL elements regardless of "
+                f"node_set '{load_bc.node_set}', which ccx may reject.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            f.write(
+                "** NOTE: surface flux applied to ALL elements without a face "
+                "label (S1..S6); node_set is ignored and ccx may require "
+                "explicit element faces for solid elements.\n"
+            )
             f.write("*DFLUX\n")
             f.write(f"ALL, S, {load_bc.values[0]:.10g}\n")
 
         elif load_bc.bc_type == LoadType.CONVECTION:
+            warnings.warn(
+                "CalculiX *FILM on solid (C3D*) elements requires an "
+                "element-face label (F1..F6); this card writes 'ALL, F, ...', "
+                "applying convection to ALL elements regardless of "
+                f"node_set '{load_bc.node_set}', which ccx may reject.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            f.write(
+                "** NOTE: convection applied to ALL elements without a face "
+                "label (F1..F6); node_set is ignored and ccx may require "
+                "explicit element faces for solid elements.\n"
+            )
             f.write("*FILM\n")
             h_conv = load_bc.values[0]
             T_amb = load_bc.values[1] if len(load_bc.values) > 1 else 20.0
@@ -247,9 +329,15 @@ def generate_inp(
         f.write("\n")
 
         # Initial conditions
-        if analysis in ("thermal_steady", "thermal_transient"):
+        has_temperature_load = any(
+            bc.bc_type == LoadType.TEMPERATURE for bc in load_case.loads
+        )
+        if analysis in ("thermal_steady", "thermal_transient") or (
+            analysis == "static" and has_temperature_load
+        ):
             f.write("*INITIAL CONDITIONS, TYPE=TEMPERATURE\n")
-            f.write("ALL, 20.0\n")
+            for nid in range(mesh.n_nodes):
+                f.write(f"{nid + 1}, 20.0\n")
 
         # Step
         if analysis == "static":
@@ -500,7 +588,7 @@ class CalculiXBackend(SolverBackend):
 
         Writes an Abaqus-format .inp file, invokes ``ccx``, and parses the
         resulting .frd output into a solver-agnostic
-        :class:`~feaweld.core.types.FEAResults`.
+        [FEAResults][feaweld.core.types.FEAResults].
 
         Parameters
         ----------
@@ -565,7 +653,7 @@ class CalculiXBackend(SolverBackend):
         Parameters
         ----------
         mesh, material, load_case
-            See :meth:`SolverBackend.solve_thermal_steady`.
+            See [SolverBackend.solve_thermal_steady][feaweld.solver.backend.SolverBackend.solve_thermal_steady].
 
         Returns
         -------
@@ -674,14 +762,14 @@ class CalculiXBackend(SolverBackend):
     ) -> FEAResults:
         """Sequential thermomechanical coupling via CalculiX.
 
-        Delegates to :func:`feaweld.solver.thermomechanical.sequential_coupled_solve`,
+        Delegates to [feaweld.solver.thermomechanical.sequential_coupled_solve][],
         which alternates a thermal solve and a mechanical solve at each
         time step (one-way coupling: temperature drives thermal strain).
 
         Parameters
         ----------
         mesh, material, mechanical_lc, thermal_lc, time_steps
-            See :meth:`SolverBackend.solve_coupled`.
+            See [SolverBackend.solve_coupled][feaweld.solver.backend.SolverBackend.solve_coupled].
         """
         from feaweld.solver.thermomechanical import sequential_coupled_solve
 

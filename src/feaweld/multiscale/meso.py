@@ -103,10 +103,14 @@ def cct_for_grade(grade: str) -> CCTDiagram:
 
     Falls back to ``default_low_carbon_cct()`` if the grade is not found.
 
-    Args:
-        grade: Steel grade identifier (e.g., "A36", "4140", "X65", "304SS").
+    Parameters
+    ----------
+    grade : str
+        Steel grade identifier (e.g., "A36", "4140", "X65", "304SS").
 
-    Returns:
+    Returns
+    -------
+    CCTDiagram
         CCTDiagram for the requested grade.
     """
     try:
@@ -152,13 +156,20 @@ def estimate_zone_properties(
 
     Uses mixture rules and empirical correlations for each phase.
 
-    Args:
-        zone: Which weld zone
-        phases: Phase fractions
-        base_yield: Base metal yield strength (MPa)
-        base_uts: Base metal UTS (MPa)
+    Parameters
+    ----------
+    zone : WeldZone
+        Which weld zone
+    phases : PhaseComposition
+        Phase fractions
+    base_yield : float
+        Base metal yield strength (MPa)
+    base_uts : float
+        Base metal UTS (MPa)
 
-    Returns:
+    Returns
+    -------
+    MesoZoneProperties
         MesoZoneProperties with estimated mechanical properties.
     """
     # Phase-specific properties (typical for low-carbon steel)
@@ -217,11 +228,16 @@ def sdas_to_yield_strength(sdas_um: float, base_yield: float = 250.0) -> float:
 
     Empirical correlation: σ_y ∝ (SDAS)^(-0.5) (Hall-Petch-like)
 
-    Args:
-        sdas_um: Secondary dendrite arm spacing (μm)
-        base_yield: Base metal yield strength (MPa)
+    Parameters
+    ----------
+    sdas_um : float
+        Secondary dendrite arm spacing (μm)
+    base_yield : float
+        Base metal yield strength (MPa)
 
-    Returns:
+    Returns
+    -------
+    float
         Estimated yield strength (MPa)
     """
     # Reference: SDAS_ref=40μm gives base_yield for weld metal
@@ -245,13 +261,20 @@ def assign_zones(
     - +2mm to +haz_width: INTERCRITICAL_HAZ
     - Beyond: BASE_METAL
 
-    Args:
-        node_positions: (n_nodes, 3) node coordinates
-        weld_center: (3,) center of weld
-        weld_radius: Radius of weld metal region (mm)
-        haz_width: Total HAZ width (mm)
+    Parameters
+    ----------
+    node_positions : NDArray[np.float64]
+        (n_nodes, 3) node coordinates
+    weld_center : NDArray[np.float64]
+        (3,) center of weld
+    weld_radius : float
+        Radius of weld metal region (mm)
+    haz_width : float
+        Total HAZ width (mm)
 
-    Returns:
+    Returns
+    -------
+    NDArray
         Array of WeldZone enum values for each node.
     """
     distances = np.linalg.norm(node_positions - weld_center, axis=1)
@@ -286,13 +309,20 @@ def cooling_rate_from_thermal(
 
     Computes average cooling rate between T_high and T_low (t8/5 method).
 
-    Args:
-        temperature_history: (n_timesteps, n_nodes) temperatures
-        time_steps: (n_timesteps,) time values (s)
-        T_high: Upper temperature for cooling rate calculation (C)
-        T_low: Lower temperature for cooling rate calculation (C)
+    Parameters
+    ----------
+    temperature_history : NDArray[np.float64]
+        (n_timesteps, n_nodes) temperatures
+    time_steps : NDArray[np.float64]
+        (n_timesteps,) time values (s)
+    T_high : float
+        Upper temperature for cooling rate calculation (C)
+    T_low : float
+        Lower temperature for cooling rate calculation (C)
 
-    Returns:
+    Returns
+    -------
+    NDArray[np.float64]
         (n_nodes,) cooling rates in C/s
     """
     n_times, n_nodes = temperature_history.shape

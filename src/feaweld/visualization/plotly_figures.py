@@ -1,8 +1,8 @@
 """Plotly figure builders for interactive HTML reports.
 
-Mirrors the most useful static :mod:`~feaweld.visualization.report_figures`
+Mirrors the most useful static [report_figures][feaweld.visualization.report_figures]
 plots with Plotly equivalents. Each builder returns a
-:class:`plotly.graph_objects.Figure`; embed them in HTML via
+`plotly.graph_objects.Figure`; embed them in HTML via
 ``fig.to_html(include_plotlyjs="cdn", full_html=False)``.
 
 Plotly is an optional dependency — installed with ``pip install feaweld[viz]``.
@@ -139,7 +139,7 @@ def rainflow_plotly(cycles: list[tuple[float, float, float]], bins: int = 20) ->
     Parameters
     ----------
     cycles : list of (range, mean, count)
-        Output of :func:`feaweld.fatigue.rainflow.rainflow_count`.
+        Output of [feaweld.fatigue.rainflow.rainflow_count][].
     bins : int
         Number of histogram bins.
 

@@ -41,16 +41,24 @@ def get_weld_efficiency(
 ) -> WeldEfficiency:
     """Look up a weld joint efficiency factor.
 
-    Args:
-        standard: Code standard (e.g. ``"ASME_VIII_Div1"``, ``"AWS_D1.1"``).
-        joint_type: Joint type (e.g. ``"Type_1"``, ``"CJP"``, ``"Butt_full_pen"``).
-        examination: NDE examination level (e.g. ``"Full_RT"``, ``"Spot_RT"``).
+    Parameters
+    ----------
+    standard : str
+        Code standard (e.g. ``"ASME_VIII_Div1"``, ``"AWS_D1.1"``).
+    joint_type : str
+        Joint type (e.g. ``"Type_1"``, ``"CJP"``, ``"Butt_full_pen"``).
+    examination : str
+        NDE examination level (e.g. ``"Full_RT"``, ``"Spot_RT"``).
 
-    Returns:
+    Returns
+    -------
+    WeldEfficiency
         WeldEfficiency dataclass.
 
-    Raises:
-        KeyError: If the combination is not found.
+    Raises
+    ------
+    KeyError
+        If the combination is not found.
     """
     data = get_cache().get("weld_efficiency/tables")
     for entry in data:
@@ -78,11 +86,16 @@ def list_efficiencies(
 ) -> list[WeldEfficiency]:
     """List weld efficiency entries with optional filtering.
 
-    Args:
-        standard: Filter by code standard.
-        joint_type: Filter by joint type.
+    Parameters
+    ----------
+    standard : str | None
+        Filter by code standard.
+    joint_type : str | None
+        Filter by joint type.
 
-    Returns:
+    Returns
+    -------
+    list[WeldEfficiency]
         List of matching WeldEfficiency entries.
     """
     data = get_cache().get("weld_efficiency/tables")

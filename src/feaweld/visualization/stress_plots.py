@@ -39,7 +39,7 @@ def stress_field_to_pyvista(
     mesh: FEMesh,
     stress: StressField,
 ) -> Any:
-    """Convert an :class:`FEMesh` and :class:`StressField` to a PyVista ``UnstructuredGrid``.
+    """Convert an [FEMesh][feaweld.core.types.FEMesh] and [StressField][feaweld.core.types.StressField] to a PyVista ``UnstructuredGrid``.
 
     Parameters
     ----------
@@ -119,9 +119,70 @@ _COMPONENT_MAP: dict[str, str] = {
 }
 
 
+def resolve_component(component: str) -> str:
+    """Resolve a user-friendly stress component name to its point-data key.
+
+    This is the single source of truth for the component-name mapping used
+    across the 3-D visualization modules.
+
+    Parameters
+    ----------
+    component : str
+        One of ``"von_mises"``, ``"tresca"``, ``"xx"``, ``"yy"``, ``"zz"``,
+        ``"xy"``, ``"yz"``, ``"xz"``, ``"principal_1"``, ``"principal_2"``,
+        ``"principal_3"``.
+
+    Returns
+    -------
+    str
+        The PyVista ``point_data`` key for the requested component.
+
+    Raises
+    ------
+    ValueError
+        If *component* is not a recognised name.
+    """
+    key = _COMPONENT_MAP.get(component)
+    if key is None:
+        raise ValueError(
+            f"Unknown component '{component}'. "
+            f"Choose from: {list(_COMPONENT_MAP)}"
+        )
+    return key
+
+
+def resolve_grid(mesh: Any, stress: StressField | None = None) -> Any:
+    """Return a PyVista grid from either an FEMesh(+StressField) or a ready grid.
+
+    Lets the 3-D plotting functions accept either the solver-agnostic
+    ``(FEMesh, StressField)`` pair or an already-built PyVista ``DataSet``.
+    A ready grid (detected via a ``point_data`` attribute) is returned
+    unchanged; otherwise the mesh is converted, attaching the stress field
+    when supplied and producing a bare grid when not.
+
+    Parameters
+    ----------
+    mesh : feaweld.core.types.FEMesh or pyvista.DataSet
+        The finite-element mesh, or a PyVista grid to pass through untouched.
+    stress : feaweld.core.types.StressField, optional
+        Nodal stress field.  Used only when *mesh* is an [FEMesh][feaweld.core.types.FEMesh];
+        when ``None`` a grid without stress arrays is produced.
+
+    Returns
+    -------
+    pyvista.UnstructuredGrid or pyvista.DataSet
+        A grid ready for rendering.
+    """
+    if hasattr(mesh, "point_data"):
+        return mesh
+    if stress is not None:
+        return stress_field_to_pyvista(mesh, stress)
+    return _mesh_to_pyvista_grid(mesh)
+
+
 def plot_stress_field(
-    mesh: FEMesh,
-    stress: StressField,
+    mesh: Any,
+    stress: StressField | None = None,
     component: str = "von_mises",
     show: bool = True,
     **kwargs: Any,
@@ -130,18 +191,19 @@ def plot_stress_field(
 
     Parameters
     ----------
-    mesh:
-        FE mesh.
-    stress:
-        Stress field at nodes.
-    component:
+    mesh : feaweld.core.types.FEMesh or pyvista.DataSet
+        FE mesh, or a ready PyVista grid carrying the component arrays.
+    stress : feaweld.core.types.StressField, optional
+        Stress field at nodes.  Required when *mesh* is an [FEMesh][feaweld.core.types.FEMesh];
+        ignored when *mesh* is already a grid.
+    component : str
         Which scalar to display.  One of ``"von_mises"``, ``"tresca"``,
         ``"xx"``, ``"yy"``, ``"zz"``, ``"xy"``, ``"yz"``, ``"xz"``,
         ``"principal_1"``, ``"principal_3"``.
-    show:
+    show : bool
         If *True* display an interactive window.  Pass *False* for
         off-screen or headless use.
-    **kwargs:
+    **kwargs
         Forwarded to ``plotter.add_mesh()``.
 
     Returns
@@ -157,14 +219,9 @@ def plot_stress_field(
             "Install with: pip install pyvista"
         ) from exc
 
-    grid = stress_field_to_pyvista(mesh, stress)
+    grid = resolve_grid(mesh, stress)
 
-    scalar_key = _COMPONENT_MAP.get(component)
-    if scalar_key is None:
-        raise ValueError(
-            f"Unknown component '{component}'. "
-            f"Choose from: {list(_COMPONENT_MAP)}"
-        )
+    scalar_key = resolve_component(component)
 
     from feaweld.visualization.theme import get_cmap, configure_plotter
 
@@ -196,8 +253,8 @@ def plot_stress_field(
 # ---------------------------------------------------------------------------
 
 def plot_deformed(
-    mesh: FEMesh,
-    displacement: NDArray,
+    mesh: Any,
+    displacement: NDArray | None = None,
     scale: float = 10.0,
     stress: StressField | None = None,
     show: bool = True,
@@ -206,15 +263,16 @@ def plot_deformed(
 
     Parameters
     ----------
-    mesh:
-        Undeformed mesh.
-    displacement:
-        Nodal displacement array ``(n_nodes, 3)``.
-    scale:
+    mesh : feaweld.core.types.FEMesh or pyvista.DataSet
+        Undeformed mesh, or a ready (already-deformed) PyVista grid.
+    displacement : numpy.ndarray, optional
+        Nodal displacement array ``(n_nodes, 3)``.  Required when *mesh* is
+        an [FEMesh][feaweld.core.types.FEMesh]; ignored when *mesh* is already a grid.
+    scale : float
         Displacement magnification factor.
-    stress:
+    stress : feaweld.core.types.StressField, optional
         If provided, the deformed mesh is coloured by von-Mises stress.
-    show:
+    show : bool
         Display the interactive window.
 
     Returns
@@ -229,22 +287,27 @@ def plot_deformed(
             "Install with: pip install pyvista"
         ) from exc
 
-    # Build deformed coordinates
-    deformed_nodes = mesh.nodes + scale * displacement
-
-    deformed_mesh = FEMesh(
-        nodes=deformed_nodes,
-        elements=mesh.elements,
-        element_type=mesh.element_type,
-    )
+    if hasattr(mesh, "point_data"):
+        # Already a PyVista grid; assume it carries the deformed geometry.
+        grid = mesh
+        colored = "von_mises" in grid.point_data
+    else:
+        # Build deformed coordinates from the FEMesh.
+        deformed_nodes = mesh.nodes + scale * displacement
+        deformed_mesh = FEMesh(
+            nodes=deformed_nodes,
+            elements=mesh.elements,
+            element_type=mesh.element_type,
+        )
+        grid = resolve_grid(deformed_mesh, stress)
+        colored = stress is not None
 
     from feaweld.visualization.theme import get_cmap, configure_plotter
 
     plotter = pv.Plotter(off_screen=not show)
     configure_plotter(plotter)
 
-    if stress is not None:
-        grid = stress_field_to_pyvista(deformed_mesh, stress)
+    if colored:
         plotter.add_mesh(
             grid,
             scalars="von_mises",
@@ -253,7 +316,6 @@ def plot_deformed(
             scalar_bar_args={"title": "Von Mises (MPa)"},
         )
     else:
-        grid = _mesh_to_pyvista_grid(deformed_mesh)
         plotter.add_mesh(grid, color="steelblue", show_edges=True)
 
     plotter.add_axes()
@@ -267,19 +329,21 @@ def plot_deformed(
 # ---------------------------------------------------------------------------
 
 def plot_temperature_field(
-    mesh: FEMesh,
-    temperature: NDArray,
+    mesh: Any,
+    temperature: NDArray | None = None,
     show: bool = True,
 ) -> Any:
     """Plot temperature contours on the FE mesh.
 
     Parameters
     ----------
-    mesh:
-        FE mesh.
-    temperature:
-        Nodal temperature array ``(n_nodes,)``.
-    show:
+    mesh : feaweld.core.types.FEMesh or pyvista.DataSet
+        FE mesh, or a ready PyVista grid (carrying a ``"Temperature"`` array
+        when *temperature* is omitted).
+    temperature : numpy.ndarray, optional
+        Nodal temperature array ``(n_nodes,)``.  Attached to the grid when
+        supplied; required when *mesh* is an [FEMesh][feaweld.core.types.FEMesh].
+    show : bool
         Display interactively.
 
     Returns
@@ -294,8 +358,9 @@ def plot_temperature_field(
             "Install with: pip install pyvista"
         ) from exc
 
-    grid = _mesh_to_pyvista_grid(mesh)
-    grid.point_data["Temperature"] = np.asarray(temperature, dtype=np.float64)
+    grid = resolve_grid(mesh)
+    if temperature is not None:
+        grid.point_data["Temperature"] = np.asarray(temperature, dtype=np.float64)
 
     from feaweld.visualization.theme import get_cmap, configure_plotter
 

@@ -44,11 +44,16 @@ def engineering_dashboard(
       [5] Weld group geometry (if Blodgett result available)
       [6] Summary text box with key metrics
 
-    Args:
-        workflow_result: WorkflowResult from pipeline.workflow
-        show: If True, display the figure interactively.
+    Parameters
+    ----------
+    workflow_result : Any
+        WorkflowResult from pipeline.workflow
+    show : bool
+        If True, display the figure interactively.
 
-    Returns:
+    Returns
+    -------
+    Any
         matplotlib.figure.Figure
     """
     plt = _require_matplotlib()
@@ -102,11 +107,16 @@ def fatigue_dashboard(
       [3] Stress distribution (histogram or cross-section)
       [4] Summary text with Miner damage, life, safety factor
 
-    Args:
-        workflow_result: WorkflowResult from pipeline.workflow
-        show: If True, display the figure interactively.
+    Parameters
+    ----------
+    workflow_result : Any
+        WorkflowResult from pipeline.workflow
+    show : bool
+        If True, display the figure interactively.
 
-    Returns:
+    Returns
+    -------
+    Any
         matplotlib.figure.Figure
     """
     plt = _require_matplotlib()
@@ -143,12 +153,18 @@ def comparison_view(
 ) -> Any:
     """Side-by-side stress contour comparison.
 
-    Args:
-        results: List of (label, FEMesh, StressField) tuples.
-        component: Stress component to plot.
-        show: If True, display the figure.
+    Parameters
+    ----------
+    results : list[tuple[str, Any, Any]]
+        List of (label, FEMesh, StressField) tuples.
+    component : str
+        Stress component to plot.
+    show : bool
+        If True, display the figure.
 
-    Returns:
+    Returns
+    -------
+    Any
         matplotlib.figure.Figure
     """
     plt = _require_matplotlib()
@@ -205,11 +221,16 @@ def postprocess_summary(
 ) -> Any:
     """One subplot per post-processing method that was run.
 
-    Args:
-        workflow_result: WorkflowResult
-        show: If True, display the figure.
+    Parameters
+    ----------
+    workflow_result : Any
+        WorkflowResult
+    show : bool
+        If True, display the figure.
 
-    Returns:
+    Returns
+    -------
+    Any
         matplotlib.figure.Figure
     """
     plt = _require_matplotlib()

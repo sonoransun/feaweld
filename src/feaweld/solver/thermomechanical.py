@@ -38,7 +38,7 @@ def sequential_coupled_solve(
         the corresponding body forces to the mechanical problem.
     3.  Solve the static mechanical problem for each time step.
     4.  Combine thermal and mechanical results into a single
-        :class:`FEAResults` object.
+        [FEAResults][feaweld.core.types.FEAResults] object.
 
     Parameters
     ----------
@@ -55,7 +55,7 @@ def sequential_coupled_solve(
     time_steps : NDArray
         Time values (s) for the transient analysis.
     heat_source : object or None
-        Optional moving heat source (e.g. :class:`GoldakHeatSource`).
+        Optional moving heat source (e.g. [GoldakHeatSource][feaweld.solver.thermal.GoldakHeatSource]).
 
     Returns
     -------

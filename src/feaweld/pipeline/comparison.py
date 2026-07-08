@@ -7,7 +7,6 @@ comparison reports.
 
 from __future__ import annotations
 
-import html as html_mod
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -204,15 +203,22 @@ def compute_stress_field_difference(
 
     Requires both fields to have the same number of points.
 
-    Args:
-        stress_a: First stress field.
-        stress_b: Second stress field.
+    Parameters
+    ----------
+    stress_a : StressField
+        First stress field.
+    stress_b : StressField
+        Second stress field.
 
-    Returns:
+    Returns
+    -------
+    StressField
         StressField with values = stress_a.values - stress_b.values
 
-    Raises:
-        ValueError: If the stress fields have different shapes.
+    Raises
+    ------
+    ValueError
+        If the stress fields have different shapes.
     """
     if stress_a.values.shape != stress_b.values.shape:
         raise ValueError(
@@ -234,15 +240,22 @@ def generate_comparison_report(
 ) -> str:
     """Generate an HTML comparison report for a parametric study.
 
-    Args:
-        study_results: StudyResults from Study.run()
-        output_dir: Directory to write the report
-        baseline: Name of baseline case for delta computation.
+    Parameters
+    ----------
+    study_results : Any
+        StudyResults from Study.run()
+    output_dir : str | Path
+        Directory to write the report
+    baseline : str | None
+        Name of baseline case for delta computation.
 
-    Returns:
+    Returns
+    -------
+    str
         Path to the generated HTML file.
     """
     from feaweld import __version__
+    from feaweld.pipeline.report import _get_env
 
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -255,143 +268,92 @@ def generate_comparison_report(
     }
     table = ComparisonTable(case_names=case_names, metrics=metrics)
 
-    content_parts = []
-
-    # Study overview
-    content_parts.append(_section_overview(study_results))
-
-    # Metric comparison table
-    content_parts.append(_section_metric_table(table))
-
-    # Delta table if baseline specified
-    if baseline and baseline in metrics:
-        content_parts.append(_section_delta_table(table, baseline))
+    ctx: dict[str, Any] = {
+        "title": study_results.study_name,
+        "body_class": "comparison",
+        "version": __version__,
+        "timestamp": datetime.now().isoformat(),
+        "overview": {
+            "study_name": study_results.study_name,
+            "n_cases": study_results.n_cases,
+            "n_succeeded": study_results.n_succeeded,
+            "n_failed": study_results.n_failed,
+            "elapsed": f"{study_results.elapsed_seconds:.1f}",
+        },
+        "metric_table": _metric_table_ctx(table),
+        "delta_table": (
+            _delta_table_ctx(table, baseline)
+            if baseline and baseline in metrics else None
+        ),
+        "figures": [],
+        "failed_cases": [
+            (name, message) for name, message in study_results.errors.items()
+        ],
+    }
 
     # Embedded figures
     try:
-        figures = _generate_comparison_figures(study_results, table, baseline)
-        if figures:
-            content_parts.append(_section_figures(figures))
+        figure_map = _generate_comparison_figures(study_results, table, baseline)
+        ctx["figures"] = [
+            {"key": key, "layout": "grid", **entry}
+            for key, entry in figure_map.items()
+        ]
     except ImportError:
         pass
 
-    # Errors
-    if study_results.errors:
-        error_html = "".join(
-            f"<li><b>{html_mod.escape(k)}:</b> {html_mod.escape(v)}</li>"
-            for k, v in study_results.errors.items()
-        )
-        content_parts.append(f"""
-        <div class="error-box">
-            <h2>Failed Cases ({len(study_results.errors)})</h2>
-            <ul>{error_html}</ul>
-        </div>
-        """)
-
-    content = "\n".join(content_parts)
-
-    report_html = _COMPARISON_TEMPLATE.replace("{{ title }}", html_mod.escape(study_results.study_name))
-    report_html = report_html.replace("{{ content }}", content)
-    report_html = report_html.replace("{{ version }}", __version__)
-    report_html = report_html.replace("{{ timestamp }}", datetime.now().isoformat())
+    template = _get_env().get_template("comparison.html.j2")
+    report_html = template.render(**ctx)
 
     report_path = out_dir / f"{study_results.study_name}_comparison.html"
-    report_path.write_text(report_html)
+    report_path.write_text(report_html, encoding="utf-8")
     return str(report_path)
 
 
 # ---------------------------------------------------------------------------
-# HTML template and section builders
+# Template context builders
 # ---------------------------------------------------------------------------
 
-_COMPARISON_TEMPLATE = """<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="utf-8">
-    <title>feaweld Comparison Report - {{ title }}</title>
-    <style>
-        body { font-family: 'Segoe UI', Arial, sans-serif; margin: 40px; color: #333; }
-        h1 { color: #1a5276; border-bottom: 2px solid #2980b9; padding-bottom: 10px; }
-        h2 { color: #2471a3; margin-top: 30px; }
-        table { border-collapse: collapse; width: 100%; margin: 15px 0; }
-        th, td { border: 1px solid #ddd; padding: 8px 12px; text-align: right; }
-        th { background-color: #2980b9; color: white; text-align: center; }
-        td:first-child { text-align: left; font-weight: bold; }
-        tr:nth-child(even) { background-color: #f2f2f2; }
-        .positive { color: #e74c3c; }
-        .negative { color: #27ae60; }
-        .summary-box { background: #eaf2f8; padding: 15px; border-radius: 5px; margin: 15px 0; }
-        .error-box { background: #fadbd8; padding: 15px; border-radius: 5px; }
-        .figure-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin: 15px 0; }
-        .figure-item { text-align: center; }
-        .figure-item img { border: 1px solid #ddd; border-radius: 4px; max-width: 100%; }
-        .figure-caption { font-style: italic; color: #555; margin-top: 5px; }
-        footer { margin-top: 40px; color: #888; font-size: 0.9em; border-top: 1px solid #ddd; padding-top: 10px; }
-    </style>
-</head>
-<body>
-    <h1>Parametric Study Comparison: {{ title }}</h1>
-    {{ content }}
-    <footer>Generated by feaweld v{{ version }} on {{ timestamp }}</footer>
-</body>
-</html>"""
+_METRIC_DISPLAY = {
+    "case": "Case",
+    "max_von_mises": "Max VM (MPa)",
+    "mean_von_mises": "Mean VM (MPa)",
+    "max_displacement": "Max Disp (mm)",
+    "max_tresca": "Max Tresca (MPa)",
+    "fatigue_life": "Fatigue Life (N)",
+    "safety_factor": "Safety Factor",
+    "hotspot_stress": "Hotspot (MPa)",
+    "max_principal_1": "Max P1 (MPa)",
+    "n_nodes": "Nodes",
+    "n_elements": "Elements",
+}
 
 
-def _section_overview(sr: Any) -> str:
-    return f"""
-    <div class="summary-box">
-        <h2>Study Overview</h2>
-        <strong>Name:</strong> {html_mod.escape(sr.study_name)}<br>
-        <strong>Total cases:</strong> {sr.n_cases}<br>
-        <strong>Succeeded:</strong> {sr.n_succeeded}<br>
-        <strong>Failed:</strong> {sr.n_failed}<br>
-        <strong>Elapsed:</strong> {sr.elapsed_seconds:.1f} s
-    </div>
-    """
-
-
-def _section_metric_table(table: ComparisonTable) -> str:
+def _metric_table_ctx(table: ComparisonTable) -> dict[str, Any] | None:
     rows = table.to_rows()
     if not rows:
-        return "<p>No results to compare.</p>"
+        return None
 
-    # Metric display names
-    display = {
-        "case": "Case",
-        "max_von_mises": "Max VM (MPa)",
-        "mean_von_mises": "Mean VM (MPa)",
-        "max_displacement": "Max Disp (mm)",
-        "max_tresca": "Max Tresca (MPa)",
-        "fatigue_life": "Fatigue Life (N)",
-        "safety_factor": "Safety Factor",
-        "hotspot_stress": "Hotspot (MPa)",
-        "max_principal_1": "Max P1 (MPa)",
-        "n_nodes": "Nodes",
-        "n_elements": "Elements",
+    # Keep a column when *any* row has a value for it, so a failed first case
+    # (all-None metrics) does not wipe columns the other cases populate.
+    # rows[0].keys() preserves 'case' first followed by MetricSet field order.
+    cols = [
+        c for c in rows[0].keys()
+        if c == "case" or any(row.get(c) is not None for row in rows)
+    ]
+    return {
+        "headers": [_METRIC_DISPLAY.get(c, c) for c in cols],
+        "rows": [[_fmt_value(row.get(c)) for c in cols] for row in rows],
     }
 
-    cols = [c for c in rows[0].keys() if rows[0][c] is not None or c == "case"]
-    header = "".join(f"<th>{display.get(c, c)}</th>" for c in cols)
-    body = ""
-    for row in rows:
-        cells = "".join(f"<td>{_fmt_value(row[c])}</td>" for c in cols)
-        body += f"<tr>{cells}</tr>"
 
-    return f"""
-    <div class="section">
-        <h2>Metric Comparison</h2>
-        <table><tr>{header}</tr>{body}</table>
-    </div>
-    """
-
-
-def _section_delta_table(table: ComparisonTable, baseline: str) -> str:
+def _delta_table_ctx(table: ComparisonTable, baseline: str) -> dict[str, Any] | None:
     deltas = table.delta_from_baseline(baseline)
     if not deltas:
-        return ""
+        return None
 
-    # Find metric keys
-    metric_keys = [k.replace("_delta", "") for k in deltas[0] if k.endswith("_delta")]
+    metric_keys = [
+        k.replace("_delta", "") for k in deltas[0] if k.endswith("_delta")
+    ]
     display = {
         "max_von_mises": "Max VM",
         "mean_von_mises": "Mean VM",
@@ -399,92 +361,116 @@ def _section_delta_table(table: ComparisonTable, baseline: str) -> str:
         "fatigue_life": "Fatigue Life",
         "safety_factor": "Safety Factor",
     }
+    shown_keys = [mk for mk in metric_keys if mk in display]
 
-    header = "<th>Case</th>"
-    for mk in metric_keys:
-        if mk in display:
-            header += f"<th>{display[mk]} delta</th><th>%</th>"
+    headers = ["Case"]
+    for mk in shown_keys:
+        headers.extend([f"{display[mk]} delta", "%"])
 
-    body = ""
+    rows = []
     for row in deltas:
-        cells = f"<td>{html_mod.escape(row['case'])}</td>"
-        for mk in metric_keys:
-            if mk not in display:
-                continue
+        cells: list[dict[str, str | None]] = [{"text": row["case"], "cls": None}]
+        for mk in shown_keys:
             d = row.get(f"{mk}_delta")
             p = row.get(f"{mk}_pct")
             if d is not None:
                 cls = "positive" if d > 0 else "negative"
-                cells += f'<td class="{cls}">{_fmt_value(d)}</td>'
-                cells += f'<td class="{cls}">{p:+.1f}%</td>'
+                cells.append({"text": _fmt_value(d), "cls": cls})
+                cells.append({"text": f"{p:+.1f}%", "cls": cls})
             else:
-                cells += "<td>-</td><td>-</td>"
-        body += f"<tr>{cells}</tr>"
+                cells.append({"text": "-", "cls": None})
+                cells.append({"text": "-", "cls": None})
+        rows.append(cells)
 
-    return f"""
-    <div class="section">
-        <h2>Deltas vs. Baseline ({html_mod.escape(baseline)})</h2>
-        <table><tr>{header}</tr>{body}</table>
-    </div>
-    """
-
-
-def _section_figures(figures: dict[str, str]) -> str:
-    from feaweld.visualization.report_figures import html_img_tag
-
-    captions = {
-        "metric_comparison": "Key Metric Comparison",
-        "parameter_sensitivity": "Parameter Sensitivity",
-        "stress_overlay": "Stress Distribution Overlay",
-        "comparison_dashboard": "Comparison Dashboard",
-    }
-
-    items = ""
-    for key, b64 in figures.items():
-        cap = captions.get(key, key.replace("_", " ").title())
-        img = html_img_tag(b64, alt=cap)
-        items += f'<div class="figure-item">{img}<div class="figure-caption">{cap}</div></div>\n'
-
-    return f"""
-    <div class="section">
-        <h2>Visualizations</h2>
-        <div class="figure-grid">{items}</div>
-    </div>
-    """
+    return {"baseline": baseline, "headers": headers, "rows": rows}
 
 
 def _generate_comparison_figures(
     study_results: Any,
     table: ComparisonTable,
     baseline: str | None,
-) -> dict[str, str]:
+) -> dict[str, dict[str, str]]:
     """Generate base64 figures for the comparison report."""
     import matplotlib
     matplotlib.use("Agg")
 
     from feaweld.visualization.report_figures import figure_to_base64
 
-    figures: dict[str, str] = {}
+    figures: dict[str, dict[str, str]] = {}
 
-    try:
-        from feaweld.visualization.comparison import plot_metric_comparison
-        fig = plot_metric_comparison(study_results, "max_von_mises", show=False)
-        figures["metric_comparison"] = figure_to_base64(fig)
-    except Exception:
-        pass
+    def _add(key: str, caption: str, build) -> None:
+        try:
+            figures[key] = {"b64": figure_to_base64(build()), "caption": caption}
+        except Exception:
+            pass
 
-    try:
-        from feaweld.visualization.comparison import plot_stress_envelope
-        fig = plot_stress_envelope(study_results, show=False)
-        figures["stress_overlay"] = figure_to_base64(fig)
-    except Exception:
-        pass
+    from feaweld.visualization import comparison as vc
 
+    _add(
+        "metric_comparison", "Key Metric Comparison",
+        lambda: vc.plot_metric_comparison(study_results, "max_von_mises", show=False),
+    )
+
+    # One sensitivity figure per detected swept parameter (up to 3)
     try:
-        from feaweld.visualization.comparison import comparison_dashboard
-        fig = comparison_dashboard(study_results, baseline=baseline, show=False)
-        figures["comparison_dashboard"] = figure_to_base64(fig)
+        swept = vc.detect_swept_parameters(study_results)
     except Exception:
-        pass
+        swept = []
+    for param in swept[:3]:
+        _add(
+            f"sensitivity_{param.replace('.', '_')}",
+            f"Sensitivity: {param}",
+            lambda p=param: vc.plot_parameter_sensitivity(
+                study_results, p, "max_von_mises", show=False,
+            ),
+        )
+
+    _add(
+        "stress_overlay", "Stress Distribution Overlay",
+        lambda: vc.plot_stress_envelope(study_results, show=False),
+    )
+
+    # Stress difference vs baseline: only when meshes match exactly
+    if baseline and baseline in study_results.results:
+        base_result = study_results.results[baseline]
+        if (
+            base_result.fea_results is not None
+            and base_result.fea_results.stress is not None
+            and base_result.mesh is not None
+        ):
+            base_stress = base_result.fea_results.stress
+            best_name, best_delta = None, -1.0
+            for name, result in study_results.results.items():
+                if name == baseline or result.fea_results is None:
+                    continue
+                stress = result.fea_results.stress
+                if (
+                    stress is None
+                    or result.mesh is None
+                    or result.mesh.n_nodes != base_result.mesh.n_nodes
+                    or stress.values.shape != base_stress.values.shape
+                ):
+                    continue
+                delta = abs(
+                    float(np.max(stress.von_mises))
+                    - float(np.max(base_stress.von_mises))
+                )
+                if delta > best_delta:
+                    best_name, best_delta = name, delta
+            if best_name is not None:
+                comp_stress = study_results.results[best_name].fea_results.stress
+                _add(
+                    "stress_difference",
+                    f"Stress Difference: {best_name} - {baseline}",
+                    lambda: vc.plot_stress_difference(
+                        base_result.mesh, comp_stress, base_stress,
+                        label_a=best_name, label_b=baseline, show=False,
+                    ),
+                )
+
+    _add(
+        "comparison_dashboard", "Comparison Dashboard",
+        lambda: vc.comparison_dashboard(study_results, baseline=baseline, show=False),
+    )
 
     return figures

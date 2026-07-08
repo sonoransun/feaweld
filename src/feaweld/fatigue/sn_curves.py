@@ -1,7 +1,7 @@
 """S-N curve database for IIW, DNV-RP-C203, and ASME VIII Div 2 standards.
 
-Each curve is returned as an :class:`~feaweld.core.types.SNCurve` comprising
-one or more :class:`~feaweld.core.types.SNSegment` entries.
+Each curve is returned as an [SNCurve][feaweld.core.types.SNCurve] comprising
+one or more [SNSegment][feaweld.core.types.SNSegment] entries.
 """
 
 from __future__ import annotations
@@ -250,16 +250,41 @@ def get_sn_curve(standard: str, name: str) -> SNCurve:
     raise ValueError(f"Unknown standard '{standard}'. Choose from iiw, dnv, asme.")
 
 
+def parse_sn_spec(spec: str) -> SNCurve:
+    """Parse a combined S-N curve spec string like ``"IIW_FAT90"``.
+
+    Accepts ``"<standard>_<name>"`` (e.g. ``"IIW_FAT90"``, ``"DNV_D"``,
+    ``"ASME_ferritic"``) or a bare IIW FAT class (``"FAT90"`` / ``"90"``).
+
+    Parameters
+    ----------
+    spec : str
+        Combined curve specification.
+
+    Returns
+    -------
+    SNCurve
+    """
+    if "_" in spec:
+        standard, name = spec.split("_", 1)
+        return get_sn_curve(standard.lower(), name)
+    return get_sn_curve("iiw", spec)
+
+
 def get_sn_curve_by_detail(detail_number: int) -> SNCurve:
     """Get an IIW S-N curve by weld detail category number.
 
     Looks up the FAT class from the IIW weld detail database, then
     returns the corresponding S-N curve.
 
-    Args:
-        detail_number: IIW weld detail number (e.g., 100, 211, 413).
+    Parameters
+    ----------
+    detail_number : int
+        IIW weld detail number (e.g., 100, 211, 413).
 
-    Returns:
+    Returns
+    -------
+    SNCurve
         SNCurve for the FAT class associated with the detail.
     """
     from feaweld.data.sn_curves.weld_details import get_weld_detail

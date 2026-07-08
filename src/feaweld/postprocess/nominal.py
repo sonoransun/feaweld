@@ -49,12 +49,18 @@ def categorize_stress_section(
 ) -> StressCategorization:
     """Categorize stress through a section per ASME VIII Div 2.
 
-    Args:
-        stress_through_thickness: (n_points,) stress values through thickness
-        thickness: plate/shell thickness (mm)
-        z_coords: (n_points,) z-coordinates through thickness (0 to t)
+    Parameters
+    ----------
+    stress_through_thickness : NDArray[np.float64]
+        (n_points,) stress values through thickness
+    thickness : float
+        plate/shell thickness (mm)
+    z_coords : NDArray[np.float64]
+        (n_points,) z-coordinates through thickness (0 to t)
 
-    Returns:
+    Returns
+    -------
+    StressCategorization
         StressCategorization with membrane, bending, peak components.
     """
     t = thickness
@@ -92,12 +98,18 @@ def asme_allowable_check(
 ) -> dict[str, dict]:
     """Check stress limits per ASME VIII Division 2 Part 5.
 
-    Args:
-        categorization: StressCategorization result
-        S_m: allowable stress intensity (MPa) = min(σ_u/2.4, σ_y/1.5)
-        S_y: yield strength (MPa)
+    Parameters
+    ----------
+    categorization : StressCategorization
+        StressCategorization result
+    S_m : float
+        allowable stress intensity (MPa) = min(σ_u/2.4, σ_y/1.5)
+    S_y : float
+        yield strength (MPa)
 
-    Returns:
+    Returns
+    -------
+    dict[str, dict]
         Dict with category checks: {category: {value, limit, ratio, passes}}
     """
     checks = {}
@@ -148,13 +160,20 @@ def extract_stress_along_path(
 ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
     """Extract stress values along a path through the mesh.
 
-    Args:
-        results: FEA results with stress field
-        start_node: node ID at path start (e.g., inner surface)
-        end_node: node ID at path end (e.g., outer surface)
-        n_points: number of interpolation points
+    Parameters
+    ----------
+    results : FEAResults
+        FEA results with stress field
+    start_node : int
+        node ID at path start (e.g., inner surface)
+    end_node : int
+        node ID at path end (e.g., outer surface)
+    n_points : int
+        number of interpolation points
 
-    Returns:
+    Returns
+    -------
+    tuple[NDArray[np.float64], NDArray[np.float64]]
         (distances, stress_values) along the path
     """
     if results.stress is None:

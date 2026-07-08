@@ -8,6 +8,17 @@ Run any of them with:
 python examples/<name>.py
 ```
 
+## YAML cases
+
+The `examples/` directory also ships two declarative cases driven by the CLI
+rather than Python (see `examples/README.md` for details):
+
+- **`fillet_t_joint.yaml`** — a single fillet T-joint analysis mirroring the
+  [quickstart](../quickstart.md). Run it with `feaweld run examples/fillet_t_joint.yaml`.
+- **`leg_sweep_study.yaml`** — the weld-leg-size parametric study from the
+  [parametric study tutorial](../tutorials/02_parametric_study.md). Run it with
+  `feaweld study run examples/leg_sweep_study.yaml -j 4`.
+
 ## Fatigue and structural
 
 ### `fillet_t_joint.py`

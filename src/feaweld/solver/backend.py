@@ -16,7 +16,7 @@ class SolverBackend(ABC):
 
     All concrete backends must implement the four core solve methods.
     Each method accepts solver-agnostic data structures and returns
-    :class:`FEAResults`.
+    [FEAResults][feaweld.core.types.FEAResults].
     """
 
     @abstractmethod

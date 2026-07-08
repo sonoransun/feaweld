@@ -81,7 +81,7 @@ def create_notched_model(
     1. Calls ``joint.build(model_name)`` to create the sharp-corner
        geometry with physical groups.
     2. Retrieves weld-toe coordinates from the joint.
-    3. Calls :func:`insert_fictitious_radius` to round each toe.
+    3. Calls [insert_fictitious_radius][feaweld.geometry.notch.insert_fictitious_radius] to round each toe.
 
     After this function returns, the active Gmsh model is ready for
     meshing.
@@ -89,7 +89,7 @@ def create_notched_model(
     Parameters
     ----------
     joint:
-        A :class:`~feaweld.geometry.joints.JointGeometry` instance whose
+        A [JointGeometry][feaweld.geometry.joints.JointGeometry] instance whose
         ``build`` method has **not** yet been called (this function will
         call it).
     radius:

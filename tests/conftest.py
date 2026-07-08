@@ -9,6 +9,7 @@ from feaweld.core.types import (
     SNCurve, SNSegment, SNStandard,
 )
 from feaweld.core.materials import Material
+from feaweld.solver.backend import SolverBackend
 
 
 @pytest.fixture
@@ -154,4 +155,179 @@ def simple_load_case():
                 values=np.array([0.0, 0.0, 0.0]),
             ),
         ],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Fake solver backend for exercising solver-agnostic wiring without FEniCSx /
+# CalculiX.  Every solve method returns a canned, gradient-stress FEAResults
+# built from the mesh it is handed and records the call so tests can assert
+# which method ran and inspect the LoadCase it received.
+# ---------------------------------------------------------------------------
+
+class FakeBackend(SolverBackend):
+    """A SolverBackend that fabricates deterministic results and logs calls.
+
+    The canned stress field is a through-thickness gradient (σ_yy rising with
+    the y-coordinate plus small σ_xx / τ_xy terms) so that post-processing
+    methods have a non-trivial field to chew on.  Displacements are small and
+    monotone in y; thermal solves return a plausible temperature ramp.
+
+    Each ``solve_*`` call appends a dict to :attr:`calls` with the method name
+    and its arguments (``load_case`` for mechanical, ``load_case`` +
+    ``time_steps`` for transient, etc.).  Use :meth:`methods_called` and
+    :meth:`calls_to` to inspect the recorded history.
+    """
+
+    def __init__(self, stress_scale: float = 1.0, temp_peak: float = 120.0):
+        self.calls: list[dict] = []
+        self.stress_scale = float(stress_scale)
+        self.temp_peak = float(temp_peak)
+
+    # -- canned field builders ------------------------------------------------
+
+    @staticmethod
+    def _yfrac(mesh: FEMesh) -> np.ndarray:
+        y = np.asarray(mesh.nodes, dtype=np.float64)[:, 1]
+        span = float(y.max() - y.min())
+        if span < 1e-12:
+            return np.zeros(mesh.n_nodes)
+        return (y - y.min()) / span
+
+    def canned_stress(self, mesh: FEMesh) -> np.ndarray:
+        """Gradient stress field (n, 6) in Voigt notation (MPa)."""
+        f = self._yfrac(mesh)
+        s = np.zeros((mesh.n_nodes, 6))
+        s[:, 1] = (50.0 + 150.0 * f) * self.stress_scale   # σ_yy: 50 → 200
+        s[:, 0] = 20.0 * f * self.stress_scale             # small σ_xx
+        s[:, 3] = 10.0 * f * self.stress_scale             # small τ_xy
+        return s
+
+    def canned_displacement(self, mesh: FEMesh) -> np.ndarray:
+        """Small monotone displacement field (n, 3)."""
+        f = self._yfrac(mesh)
+        d = np.zeros((mesh.n_nodes, 3))
+        d[:, 1] = 0.01 * f
+        return d
+
+    def canned_temperature(self, mesh: FEMesh) -> np.ndarray:
+        """Plausible nodal temperature ramp (n,) in C."""
+        f = self._yfrac(mesh)
+        return 20.0 + (self.temp_peak - 20.0) * f
+
+    # -- SolverBackend interface ---------------------------------------------
+
+    def solve_static(self, mesh, material, load_case, temperature=20.0):
+        self.calls.append({
+            "method": "solve_static", "mesh": mesh, "material": material,
+            "load_case": load_case, "temperature": temperature,
+        })
+        return FEAResults(
+            mesh=mesh,
+            displacement=self.canned_displacement(mesh),
+            stress=StressField(values=self.canned_stress(mesh)),
+            metadata={"solver": "fake", "temperature": temperature},
+        )
+
+    def solve_thermal_steady(self, mesh, material, load_case):
+        self.calls.append({
+            "method": "solve_thermal_steady", "mesh": mesh,
+            "material": material, "load_case": load_case,
+        })
+        return FEAResults(
+            mesh=mesh,
+            temperature=self.canned_temperature(mesh),
+            metadata={"solver": "fake", "analysis": "thermal_steady"},
+        )
+
+    def solve_thermal_transient(self, mesh, material, load_case, time_steps,
+                                heat_source=None):
+        ts = np.asarray(time_steps, dtype=np.float64)
+        self.calls.append({
+            "method": "solve_thermal_transient", "mesh": mesh,
+            "material": material, "load_case": load_case,
+            "time_steps": ts, "heat_source": heat_source,
+        })
+        temp = np.tile(self.canned_temperature(mesh), (len(ts), 1))
+        return FEAResults(
+            mesh=mesh,
+            temperature=temp,
+            time_steps=ts,
+            metadata={"solver": "fake", "analysis": "thermal_transient"},
+        )
+
+    def solve_coupled(self, mesh, material, mechanical_lc, thermal_lc, time_steps):
+        ts = np.asarray(time_steps, dtype=np.float64)
+        self.calls.append({
+            "method": "solve_coupled", "mesh": mesh, "material": material,
+            "mechanical_lc": mechanical_lc, "thermal_lc": thermal_lc,
+            "time_steps": ts,
+        })
+        return FEAResults(
+            mesh=mesh,
+            displacement=self.canned_displacement(mesh),
+            stress=StressField(values=self.canned_stress(mesh)),
+            temperature=self.canned_temperature(mesh),
+            time_steps=ts,
+            metadata={"solver": "fake", "analysis": "coupled"},
+        )
+
+    # -- inspection helpers ---------------------------------------------------
+
+    def methods_called(self) -> list[str]:
+        return [c["method"] for c in self.calls]
+
+    def calls_to(self, method: str) -> list[dict]:
+        return [c for c in self.calls if c["method"] == method]
+
+
+@pytest.fixture
+def fake_backend():
+    """A fresh :class:`FakeBackend` instance (records nothing yet)."""
+    return FakeBackend()
+
+
+@pytest.fixture
+def fake_backend_cls():
+    """The :class:`FakeBackend` class, for tests that build their own."""
+    return FakeBackend
+
+
+@pytest.fixture
+def grid_plate_mesh():
+    """A structured 2D plate mesh with bottom/top/weld_toe node sets.
+
+    The plate spans x in [0, 40] (width) and y in [0, 20] (through-thickness),
+    a 5x5 node grid triangulated into 32 TRI3 elements.  ``bottom`` is the
+    y = 0 edge, ``top`` the y = 20 edge, and ``weld_toe`` three ordered nodes
+    on the top surface — enough structure for surface extrapolation and
+    through-thickness linearization to run against a real gradient.
+    """
+    nx, ny = 5, 5
+    dx, dy = 10.0, 5.0
+    nodes = np.array(
+        [[i * dx, j * dy, 0.0] for j in range(ny) for i in range(nx)],
+        dtype=np.float64,
+    )
+
+    def nid(i, j):
+        return j * nx + i
+
+    elements = []
+    for j in range(ny - 1):
+        for i in range(nx - 1):
+            elements.append([nid(i, j), nid(i + 1, j), nid(i + 1, j + 1)])
+            elements.append([nid(i, j), nid(i + 1, j + 1), nid(i, j + 1)])
+    elements = np.array(elements, dtype=np.int64)
+
+    bottom = np.array([nid(i, 0) for i in range(nx)], dtype=np.int64)
+    top = np.array([nid(i, ny - 1) for i in range(nx)], dtype=np.int64)
+    weld_toe = np.array([nid(1, ny - 1), nid(2, ny - 1), nid(3, ny - 1)],
+                        dtype=np.int64)
+
+    return FEMesh(
+        nodes=nodes,
+        elements=elements,
+        element_type=ElementType.TRI3,
+        node_sets={"bottom": bottom, "top": top, "weld_toe": weld_toe},
     )

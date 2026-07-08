@@ -37,7 +37,7 @@ def _require_dolfinx() -> None:
 
 
 def _femesh_to_dolfinx(mesh: FEMesh) -> Any:
-    """Convert an :class:`FEMesh` to a DOLFINx mesh object.
+    """Convert an [FEMesh][feaweld.core.types.FEMesh] to a DOLFINx mesh object.
 
     Parameters
     ----------
@@ -93,6 +93,51 @@ def _femesh_to_dolfinx(mesh: FEMesh) -> Any:
     return ufl_domain
 
 
+def _block_dofs_for_nodes(space: Any, mesh: FEMesh, node_ids: NDArray) -> NDArray:
+    """Map input-mesh node ids to a DOLFINx space's block-dof indices.
+
+    ``dolfinx.mesh.create_mesh`` reorders vertices relative to the input
+    :class:`~feaweld.core.types.FEMesh`, so per-node data cannot be indexed
+    by the original node id.  This helper matches the requested nodes'
+    coordinates against ``space.tabulate_dof_coordinates()`` with a KD-tree
+    and returns, for each requested node, the *block* dof index (one entry
+    per node, independent of the number of vector components).  For a scalar
+    space the block dof equals the scalar dof; for a vector space of block
+    size ``bs`` the scalar dof of component ``c`` is ``block_dof * bs + c``.
+
+    Parameters
+    ----------
+    space : dolfinx.fem.FunctionSpace
+        Target function space (scalar or vector) whose dof coordinates
+        supply the match targets.
+    mesh : FEMesh
+        Input mesh providing the reference node coordinates.
+    node_ids : numpy.ndarray
+        Input-mesh node indices to locate.
+
+    Returns
+    -------
+    numpy.ndarray
+        Block dof index for each requested node, dtype ``int32``.
+
+    Notes
+    -----
+    Assumes ``space`` resolves every requested node (true for first-order
+    Lagrange spaces on first-order meshes, where the number of block dofs
+    equals ``mesh.n_nodes``).  The match is nearest-neighbour, so it is
+    robust to the vertex reordering but not to a coarser space than the
+    input node set.
+    """
+    from scipy.spatial import cKDTree
+
+    dof_coords = space.tabulate_dof_coordinates()
+    targets = mesh.nodes[node_ids]
+    if targets.shape[1] == 2:
+        targets = np.column_stack([targets, np.zeros(len(targets))])
+    _, block_dofs = cKDTree(dof_coords[:, :3]).query(targets)
+    return np.asarray(block_dofs, dtype=np.int32)
+
+
 class FEniCSBackend(SolverBackend):
     """FEA solver backend using FEniCSx / DOLFINx.
 
@@ -117,7 +162,7 @@ class FEniCSBackend(SolverBackend):
         Parameters
         ----------
         mesh, material, load_case, temperature
-            See :meth:`SolverBackend.solve_static`.
+            See [SolverBackend.solve_static][feaweld.solver.backend.SolverBackend.solve_static].
 
         Raises
         ------
@@ -140,6 +185,7 @@ class FEniCSBackend(SolverBackend):
         # Convert mesh
         domain = _femesh_to_dolfinx(mesh)
         gdim = domain.geometry.dim
+        tdim = domain.topology.dim
 
         # Function space for displacement
         V = dolfinx.fem.functionspace(domain, ("Lagrange", 1, (gdim,)))
@@ -163,63 +209,185 @@ class FEniCSBackend(SolverBackend):
         f_body = dolfinx.fem.Constant(domain, np.zeros(gdim, dtype=PETSc.ScalarType))
         L = ufl.inner(f_body, v) * ufl.dx
 
-        # Apply loads from load_case
+        # Apply loads from load_case.  Nodal forces (per-node vectors and
+        # scalar force + direction on a known node set) are collected as
+        # ``(node_ids, (n, gdim) rows)`` and injected into the RHS after
+        # assembly; only tractions and pressures enter the variational form.
+        nodal_forces: list[tuple[NDArray, NDArray]] = []
+        # Thermoelastic field, retained for stress recovery (thermal eigenstrain).
+        temp_field: tuple[Any, float] | None = None
         for load_bc in load_case.loads:
-            if load_bc.bc_type == LoadType.FORCE and load_bc.direction is not None:
-                traction = load_bc.values[0] * load_bc.direction[:gdim]
-                t_const = dolfinx.fem.Constant(
-                    domain, traction.astype(PETSc.ScalarType)
+            values = np.asarray(load_bc.values)
+            if load_bc.bc_type == LoadType.FORCE and values.ndim == 2:
+                # Per-node force vectors (e.g. moment couples): inject to RHS.
+                node_ids = mesh.node_sets.get(load_bc.node_set)
+                if node_ids is not None:
+                    nodal_forces.append((node_ids, values.astype(np.float64)))
+            elif load_bc.bc_type == LoadType.FORCE and load_bc.direction is not None:
+                # Scalar force magnitude + direction.  CalculiX *CLOAD applies
+                # ``F * direction`` to every node in the set (per-node force
+                # [N]); mirror that exactly by expanding into per-node force
+                # rows and routing through the nodal-force injection path
+                # rather than smearing a traction over the whole boundary.
+                node_ids = mesh.node_sets.get(load_bc.node_set)
+                direction = np.asarray(load_bc.direction, dtype=np.float64)[:gdim]
+                mag = float(values.ravel()[0])
+                if node_ids is not None:
+                    rows = np.tile(mag * direction, (len(node_ids), 1))
+                    nodal_forces.append((node_ids, rows))
+                else:
+                    # Fallback ONLY when the node set is unknown: treat the
+                    # value as a uniform surface traction [N/mm^2] over the
+                    # entire exterior boundary.  This is dimensionally
+                    # different from a nodal force and is a last resort.
+                    t_const = dolfinx.fem.Constant(
+                        domain, (mag * direction).astype(PETSc.ScalarType)
+                    )
+                    L += ufl.inner(t_const, v) * ufl.ds
+            elif load_bc.bc_type == LoadType.PRESSURE:
+                # Pressure acts along the inward surface normal
+                n_facet = ufl.FacetNormal(domain)
+                p_const = dolfinx.fem.Constant(
+                    domain, PETSc.ScalarType(load_bc.values[0])
                 )
-                L += ufl.inner(t_const, v) * ufl.ds
+                L += -p_const * ufl.inner(n_facet, v) * ufl.ds
+            elif load_bc.bc_type == LoadType.TEMPERATURE:
+                # Thermoelastic load: sigma_th = (3*lam + 2*mu) * alpha * dT
+                # Scalar values are uniform absolute temperatures; per-node
+                # arrays give the nodal temperature field (20 C reference).
+                S = dolfinx.fem.functionspace(domain, ("Lagrange", 1))
+                T_fn = dolfinx.fem.Function(S)
+                flat = values.ravel().astype(np.float64)
+                if flat.shape[0] == mesh.n_nodes:
+                    s_dofs = _block_dofs_for_nodes(S, mesh, np.arange(mesh.n_nodes))
+                    T_fn.x.array[s_dofs] = flat
+                else:
+                    T_fn.x.array[:] = flat[0]
+                alpha_val = material.alpha(temperature)
+                dT = T_fn - 20.0
+                L += (
+                    (3.0 * lam + 2.0 * mu) * alpha_val * dT
+                    * ufl.tr(epsilon(v)) * ufl.dx
+                )
+                temp_field = (T_fn, alpha_val)
 
-        # Boundary conditions (Dirichlet)
+        # Boundary conditions (Dirichlet).  Node-set dofs are matched by
+        # coordinate (via ``_block_dofs_for_nodes``) because DOLFINx reorders
+        # vertices relative to the input mesh, so the original node ids are
+        # not valid DOLFINx vertex indices.
         bcs = []
         for constraint in load_case.constraints:
             if constraint.bc_type == LoadType.DISPLACEMENT:
+                values = np.asarray(constraint.values)
+                if values.ndim == 2 and constraint.node_set in mesh.node_sets:
+                    # Per-node prescribed displacements (submodel cut boundary)
+                    node_ids = mesh.node_sets[constraint.node_set]
+                    block_dofs = _block_dofs_for_nodes(V, mesh, node_ids)
+                    u_fn = dolfinx.fem.Function(V)
+                    for bd, row in zip(block_dofs, values):
+                        for comp in range(gdim):
+                            u_fn.x.array[int(bd) * gdim + comp] = row[comp]
+                    bc = dolfinx.fem.dirichletbc(u_fn, block_dofs)
+                    bcs.append(bc)
+                    continue
                 u_bc = dolfinx.fem.Constant(
                     domain,
                     constraint.values[:gdim].astype(PETSc.ScalarType),
                 )
-                # Find boundary DOFs from node set
+                # Find boundary DOFs from node set (coordinate-matched block dofs)
                 if constraint.node_set in mesh.node_sets:
                     node_ids = mesh.node_sets[constraint.node_set]
-                    dofs = dolfinx.fem.locate_dofs_topological(
-                        V, 0, node_ids.astype(np.int32)
-                    )
+                    dofs = _block_dofs_for_nodes(V, mesh, node_ids)
                 else:
                     # Fall back: fix all boundary facets
+                    domain.topology.create_connectivity(tdim - 1, tdim)
                     boundary_facets = dolfinx.mesh.exterior_facet_indices(
                         domain.topology
                     )
                     dofs = dolfinx.fem.locate_dofs_topological(
-                        V, domain.topology.dim - 1, boundary_facets
+                        V, tdim - 1, boundary_facets
                     )
                 bc = dolfinx.fem.dirichletbc(u_bc, dofs, V)
                 bcs.append(bc)
 
         # Assemble and solve
-        problem = dolfinx.fem.petsc.LinearProblem(
-            a, L, bcs=bcs,
-            petsc_options={"ksp_type": "preonly", "pc_type": "lu"},
-        )
-        uh = problem.solve()
+        if not nodal_forces:
+            problem = dolfinx.fem.petsc.LinearProblem(
+                a, L, bcs=bcs,
+                petsc_options={"ksp_type": "preonly", "pc_type": "lu"},
+            )
+            uh = problem.solve()
+        else:
+            # Manual assembly so point forces can be added to the RHS vector
+            from mpi4py import MPI as _MPI
 
-        # Extract displacement at mesh nodes
+            a_form = dolfinx.fem.form(a)
+            L_form = dolfinx.fem.form(L)
+            A = dolfinx.fem.petsc.assemble_matrix(a_form, bcs=bcs)
+            A.assemble()
+            b = dolfinx.fem.petsc.assemble_vector(L_form)
+
+            for node_ids, rows in nodal_forces:
+                block_dofs = _block_dofs_for_nodes(V, mesh, node_ids)
+                for bd, row in zip(block_dofs, rows):
+                    for comp in range(min(gdim, row.shape[0])):
+                        b.setValue(
+                            int(bd) * gdim + comp,
+                            float(row[comp]),
+                            addv=PETSc.InsertMode.ADD_VALUES,
+                        )
+            b.assemblyBegin()
+            b.assemblyEnd()
+
+            dolfinx.fem.petsc.apply_lifting(b, [a_form], [bcs])
+            b.ghostUpdate(
+                addv=PETSc.InsertMode.ADD, mode=PETSc.ScatterMode.REVERSE
+            )
+            dolfinx.fem.petsc.set_bc(b, bcs)
+
+            solver = PETSc.KSP().create(_MPI.COMM_WORLD)
+            solver.setType(PETSc.KSP.Type.PREONLY)
+            solver.getPC().setType(PETSc.PC.Type.LU)
+            solver.setOperators(A)
+            uh = dolfinx.fem.Function(V)
+            solver.solve(b, uh.x.petsc_vec)
+
+        # ------------------------------------------------------------------
+        # Reorder results into INPUT node / element order.  DOLFINx reorders
+        # vertices and cells relative to the FEMesh, so raw dof-order and
+        # cell-order arrays would break the solver-agnostic FEAResults
+        # contract (CalculiX returns input-node-ordered nodal fields).
+        # ------------------------------------------------------------------
         n_nodes = mesh.n_nodes
+        block_dofs_all = _block_dofs_for_nodes(V, mesh, np.arange(n_nodes))
+        dof_block_values = uh.x.array.reshape(-1, gdim)
         disp = np.zeros((n_nodes, 3))
-        coords = uh.x.array.reshape(-1, gdim)
-        disp[:coords.shape[0], :gdim] = coords
+        disp[:, :gdim] = dof_block_values[block_dofs_all]
 
-        # Compute stress field via projection to DG space
+        # Stress expression.  When a temperature load was applied, remove the
+        # thermal eigenstrain so the reported stress is the true mechanical
+        # stress C:(eps(u) - alpha*dT*I), not C:eps(u).
+        if temp_field is not None:
+            T_fn, alpha_val = temp_field
+            eps_th = alpha_val * (T_fn - 20.0)
+
+            def sigma_out(w):
+                eps_m = epsilon(w) - eps_th * ufl.Identity(gdim)
+                return lam * ufl.tr(eps_m) * ufl.Identity(gdim) + 2.0 * mu * eps_m
+
+            sigma_expr_ufl = sigma_out(uh)
+        else:
+            sigma_expr_ufl = sigma(uh)
+
+        # Element-constant (DG0) stress projection
         W = dolfinx.fem.functionspace(domain, ("DG", 0, (gdim, gdim)))
-        sigma_expr = sigma(uh)
         stress_func = dolfinx.fem.Function(W)
         stress_expr = dolfinx.fem.Expression(
-            sigma_expr, W.element.interpolation_points()
+            sigma_expr_ufl, W.element.interpolation_points()
         )
         stress_func.interpolate(stress_expr)
 
-        # Extract stress in Voigt notation
+        # Extract stress in Voigt notation (one row per DOLFINx cell)
         stress_vals = stress_func.x.array.reshape(-1, gdim, gdim)
         n_cells = stress_vals.shape[0]
         voigt_stress = np.zeros((n_cells, 6))
@@ -233,7 +401,43 @@ class FEniCSBackend(SolverBackend):
         else:
             voigt_stress[:, 3] = stress_vals[:, 0, 1]  # tau_xy
 
-        stress_field = StressField(values=voigt_stress, location="gauss_points")
+        # Map DG0 cell stress back to INPUT elements.  ``original_cell_index``
+        # gives the input element index for each DOLFINx cell (serial run);
+        # fall back to matching cell midpoints against element centroids.
+        orig = getattr(domain.topology, "original_cell_index", None)
+        if orig is not None and len(orig) >= n_cells:
+            cell_to_elem = np.asarray(orig)[:n_cells]
+        else:
+            from scipy.spatial import cKDTree
+
+            midpoints = dolfinx.mesh.compute_midpoints(
+                domain, tdim, np.arange(n_cells, dtype=np.int32)
+            )
+            centroids = mesh.nodes[mesh.elements].mean(axis=1)
+            if centroids.shape[1] == 2:
+                centroids = np.column_stack(
+                    [centroids, np.zeros(len(centroids))]
+                )
+            _, cell_to_elem = cKDTree(centroids).query(midpoints[:, :3])
+            cell_to_elem = np.asarray(cell_to_elem)
+
+        elem_stress = np.zeros((mesh.n_elements, 6))
+        elem_stress[cell_to_elem] = voigt_stress
+
+        # Average element stresses onto nodes using the INPUT connectivity so
+        # the field is node-indexed like CalculiX's nodal stress output.
+        nodal_stress = np.zeros((n_nodes, 6))
+        counts = np.zeros(n_nodes)
+        flat_nodes = mesh.elements.ravel()
+        np.add.at(
+            nodal_stress, flat_nodes,
+            np.repeat(elem_stress, mesh.elements.shape[1], axis=0),
+        )
+        np.add.at(counts, flat_nodes, 1.0)
+        counts[counts == 0.0] = 1.0
+        nodal_stress /= counts[:, None]
+
+        stress_field = StressField(values=nodal_stress, location="nodes")
 
         return FEAResults(
             mesh=mesh,
@@ -257,7 +461,7 @@ class FEniCSBackend(SolverBackend):
         Parameters
         ----------
         mesh, material, load_case
-            See :meth:`SolverBackend.solve_thermal_steady`.
+            See [SolverBackend.solve_thermal_steady][feaweld.solver.backend.SolverBackend.solve_thermal_steady].
         """
         _require_dolfinx()
 
@@ -301,7 +505,9 @@ class FEniCSBackend(SolverBackend):
                 a += h * T * v * ufl.ds
                 L += h * T_a * v * ufl.ds
 
-        # Dirichlet BCs (fixed temperature)
+        # Dirichlet BCs (fixed temperature).  Node-set dofs are matched by
+        # coordinate because DOLFINx reorders vertices relative to the input
+        # mesh (the original node ids are not valid DOLFINx vertex indices).
         bcs = []
         for constraint in load_case.constraints:
             if constraint.bc_type == LoadType.TEMPERATURE:
@@ -309,10 +515,11 @@ class FEniCSBackend(SolverBackend):
                 T_bc = dolfinx.fem.Constant(domain, PETSc.ScalarType(T_bc_val))
                 if constraint.node_set in mesh.node_sets:
                     node_ids = mesh.node_sets[constraint.node_set]
-                    dofs = dolfinx.fem.locate_dofs_topological(
-                        V, 0, node_ids.astype(np.int32)
-                    )
+                    dofs = _block_dofs_for_nodes(V, mesh, node_ids)
                 else:
+                    domain.topology.create_connectivity(
+                        domain.topology.dim - 1, domain.topology.dim
+                    )
                     boundary_facets = dolfinx.mesh.exterior_facet_indices(
                         domain.topology
                     )
@@ -328,10 +535,9 @@ class FEniCSBackend(SolverBackend):
         )
         Th = problem.solve()
 
-        temp_array = Th.x.array.copy()
-        # Pad to n_nodes if needed
-        result_temp = np.full(mesh.n_nodes, 20.0)
-        result_temp[: len(temp_array)] = temp_array
+        # Reorder the scalar temperature field into input node order.
+        block_dofs = _block_dofs_for_nodes(V, mesh, np.arange(mesh.n_nodes))
+        result_temp = np.asarray(Th.x.array)[block_dofs].astype(np.float64)
 
         return FEAResults(
             mesh=mesh,
@@ -350,13 +556,13 @@ class FEniCSBackend(SolverBackend):
         """Transient thermal solve using backward-Euler time stepping.
 
         Supports an optional moving heat source (e.g.
-        :class:`~feaweld.solver.thermal.GoldakHeatSource`) that is
+        [GoldakHeatSource][feaweld.solver.thermal.GoldakHeatSource]) that is
         evaluated at every node and every time step.
 
         Parameters
         ----------
         mesh, material, load_case, time_steps, heat_source
-            See :meth:`SolverBackend.solve_thermal_transient`.
+            See [SolverBackend.solve_thermal_transient][feaweld.solver.backend.SolverBackend.solve_thermal_transient].
 
         Returns
         -------
@@ -422,7 +628,9 @@ class FEniCSBackend(SolverBackend):
                 q = dolfinx.fem.Constant(domain, PETSc.ScalarType(q_val))
                 L += q * v * ufl.ds
 
-        # Dirichlet BCs
+        # Dirichlet BCs.  Node-set dofs are matched by coordinate because
+        # DOLFINx reorders vertices relative to the input mesh (the original
+        # node ids are not valid DOLFINx vertex indices).
         bcs = []
         for constraint in load_case.constraints:
             if constraint.bc_type == LoadType.TEMPERATURE:
@@ -430,10 +638,11 @@ class FEniCSBackend(SolverBackend):
                 T_bc = dolfinx.fem.Constant(domain, PETSc.ScalarType(T_bc_val))
                 if constraint.node_set in mesh.node_sets:
                     node_ids = mesh.node_sets[constraint.node_set]
-                    dofs = dolfinx.fem.locate_dofs_topological(
-                        V, 0, node_ids.astype(np.int32)
-                    )
+                    dofs = _block_dofs_for_nodes(V, mesh, node_ids)
                 else:
+                    domain.topology.create_connectivity(
+                        domain.topology.dim - 1, domain.topology.dim
+                    )
                     boundary_facets = dolfinx.mesh.exterior_facet_indices(
                         domain.topology
                     )
@@ -447,11 +656,13 @@ class FEniCSBackend(SolverBackend):
         bilinear_form = dolfinx.fem.form(a)
         linear_form = dolfinx.fem.form(L)
 
-        # Storage for temperature history
+        # Storage for temperature history, kept in input node order.  The
+        # block dofs map each input node to its DOLFINx dof so every recorded
+        # step is reindexed consistently.
+        block_dofs = _block_dofs_for_nodes(V, mesh, np.arange(mesh.n_nodes))
         n_steps = len(time_steps)
-        n_dofs = len(T_n.x.array)
         temp_history = np.zeros((n_steps, mesh.n_nodes))
-        temp_history[0, :n_dofs] = T_n.x.array
+        temp_history[0, :] = np.asarray(T_n.x.array)[block_dofs]
 
         # PETSc solver
         solver = PETSc.KSP().create(MPI.COMM_WORLD)
@@ -465,11 +676,13 @@ class FEniCSBackend(SolverBackend):
             dt_const.value = dt_val
             t_current = time_steps[step_idx]
 
-            # Update heat source if provided
+            # Update heat source if provided.  Evaluate at the temperature
+            # space's dof coordinates (not domain.geometry.x, whose ordering
+            # differs from the dof ordering) so Q is assigned dof-consistently.
             if heat_source is not None and hasattr(heat_source, "evaluate"):
-                x_coords = domain.geometry.x
+                dof_coords = V.tabulate_dof_coordinates()
                 q_vals = heat_source.evaluate(
-                    x_coords[:, 0], x_coords[:, 1], x_coords[:, 2], t_current
+                    dof_coords[:, 0], dof_coords[:, 1], dof_coords[:, 2], t_current
                 )
                 Q.x.array[: len(q_vals)] = q_vals
 
@@ -487,7 +700,7 @@ class FEniCSBackend(SolverBackend):
             # Update T_n for next step
             T_n.x.array[:] = T_sol.x.array
 
-            temp_history[step_idx, :n_dofs] = T_sol.x.array
+            temp_history[step_idx, :] = np.asarray(T_sol.x.array)[block_dofs]
 
         return FEAResults(
             mesh=mesh,
@@ -506,7 +719,7 @@ class FEniCSBackend(SolverBackend):
     ) -> FEAResults:
         """Sequential thermomechanical coupling: thermal first, then mechanical.
 
-        Delegates to :func:`feaweld.solver.thermomechanical.sequential_coupled_solve`,
+        Delegates to [feaweld.solver.thermomechanical.sequential_coupled_solve][],
         which runs a transient thermal solve at each time step and
         uses the temperature field as a thermal-strain load on a
         mechanical solve.
@@ -514,7 +727,7 @@ class FEniCSBackend(SolverBackend):
         Parameters
         ----------
         mesh, material, mechanical_lc, thermal_lc, time_steps
-            See :meth:`SolverBackend.solve_coupled`.
+            See [SolverBackend.solve_coupled][feaweld.solver.backend.SolverBackend.solve_coupled].
         """
         from feaweld.solver.thermomechanical import sequential_coupled_solve
 

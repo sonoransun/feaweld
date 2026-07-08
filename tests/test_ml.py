@@ -337,6 +337,53 @@ class TestTransferLearner:
         with pytest.raises(RuntimeError, match="not fine-tuned"):
             tl.predict({"stress_range": 100})
 
+    def test_fine_tune_column_order_invariant(self) -> None:
+        """fine_tune aligns columns to the base model, so a permuted-column
+        dataset yields identical metrics to the canonically ordered one."""
+        base = self._trained_base()
+
+        new_feats = _make_synthetic_features(n_samples=60, seed=7)
+        new_feats.target = new_feats.target + 0.5
+
+        metrics_matched = TransferLearner(base).fine_tune(
+            new_feats, n_correction_trees=15
+        )
+
+        # Same data, columns (names + values) reversed together.
+        names = new_feats.feature_names
+        perm = list(range(len(names)))[::-1]
+        shuffled = FatigueFeatures(
+            feature_names=[names[i] for i in perm],
+            values=new_feats.values[:, perm].copy(),
+            target=new_feats.target.copy(),
+        )
+        metrics_shuffled = TransferLearner(base).fine_tune(
+            shuffled, n_correction_trees=15
+        )
+
+        assert metrics_shuffled["rmse_base"] == pytest.approx(
+            metrics_matched["rmse_base"]
+        )
+        assert metrics_shuffled["rmse_corrected"] == pytest.approx(
+            metrics_matched["rmse_corrected"]
+        )
+        assert metrics_shuffled["r2_corrected"] == pytest.approx(
+            metrics_matched["r2_corrected"]
+        )
+
+    def test_fine_tune_missing_feature_raises(self) -> None:
+        """fine_tune rejects target data lacking a base-model feature."""
+        base = self._trained_base()
+        names = standard_feature_names()
+        # Drop the first feature column entirely.
+        partial = FatigueFeatures(
+            feature_names=names[1:],
+            values=_make_synthetic_features(n_samples=30, seed=3).values[:, 1:].copy(),
+            target=_make_synthetic_features(n_samples=30, seed=3).target,
+        )
+        with pytest.raises(ValueError, match="missing feature"):
+            TransferLearner(base).fine_tune(partial, n_correction_trees=5)
+
     def test_untrained_base_raises(self) -> None:
         untrained = FatiguePredictor()
         with pytest.raises(RuntimeError, match="must be trained"):

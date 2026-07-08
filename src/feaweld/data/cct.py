@@ -1,7 +1,7 @@
 """CCT diagram lookup for steel grades.
 
 Loads continuous cooling transformation data from bundled JSON and
-returns :class:`~feaweld.multiscale.meso.CCTDiagram` instances that
+returns [CCTDiagram][feaweld.multiscale.meso.CCTDiagram] instances that
 can predict phase compositions at arbitrary cooling rates.
 """
 
@@ -16,14 +16,20 @@ from feaweld.multiscale.meso import CCTDiagram
 def get_cct_diagram(grade: str) -> CCTDiagram:
     """Get a CCT diagram for a steel grade.
 
-    Args:
-        grade: Steel grade identifier (e.g. ``"A36"``, ``"4140"``, ``"X80"``).
+    Parameters
+    ----------
+    grade : str
+        Steel grade identifier (e.g. ``"A36"``, ``"4140"``, ``"X80"``).
 
-    Returns:
+    Returns
+    -------
+    CCTDiagram
         CCTDiagram populated with phase-fraction curves.
 
-    Raises:
-        KeyError: If the grade is not found.
+    Raises
+    ------
+    KeyError
+        If the grade is not found.
     """
     all_grades = get_cache().get("cct/steel_grades")
     if grade not in all_grades:
@@ -66,10 +72,14 @@ def find_closest_cct(carbon_equivalent: float) -> str:
     This is a convenience function for when the user knows the CE but
     not the specific grade designation.
 
-    Args:
-        carbon_equivalent: Target carbon equivalent (IIW formula).
+    Parameters
+    ----------
+    carbon_equivalent : float
+        Target carbon equivalent (IIW formula).
 
-    Returns:
+    Returns
+    -------
+    str
         The grade name with the closest carbon equivalent.
     """
     all_grades = get_cache().get("cct/steel_grades")

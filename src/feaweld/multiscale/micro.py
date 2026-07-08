@@ -29,10 +29,14 @@ class HallPetchParams:
     def yield_strength(self, grain_size_um: float) -> float:
         """Compute yield strength for given grain size.
 
-        Args:
-            grain_size_um: Average grain diameter (μm)
+        Parameters
+        ----------
+        grain_size_um : float
+            Average grain diameter (μm)
 
-        Returns:
+        Returns
+        -------
+        float
             Yield strength (MPa)
         """
         d_m = grain_size_um * 1e-6  # convert to meters
@@ -68,10 +72,14 @@ class DislocationDensityParams:
     def flow_stress(self, dislocation_density: float) -> float:
         """Compute flow stress from dislocation density.
 
-        Args:
-            dislocation_density: ρ (1/m²), typical range 1e12 to 1e16
+        Parameters
+        ----------
+        dislocation_density : float
+            ρ (1/m²), typical range 1e12 to 1e16
 
-        Returns:
+        Returns
+        -------
+        float
             Flow stress (MPa)
         """
         return self.sigma_0 + self.alpha * self.M * self.G * self.b * np.sqrt(dislocation_density)
@@ -79,10 +87,14 @@ class DislocationDensityParams:
     def dislocation_density_from_stress(self, stress: float) -> float:
         """Inverse: estimate dislocation density from measured stress.
 
-        Args:
-            stress: Measured flow stress (MPa)
+        Parameters
+        ----------
+        stress : float
+            Measured flow stress (MPa)
 
-        Returns:
+        Returns
+        -------
+        float
             Estimated dislocation density (1/m²)
         """
         sigma_disl = max(stress - self.sigma_0, 0.0)
@@ -108,12 +120,18 @@ def homogenize_properties(
 ) -> dict[str, float]:
     """Homogenize micro-scale properties to meso-scale effective values.
 
-    Args:
-        phase_fractions: {"ferrite": 0.7, "pearlite": 0.2, "bainite": 0.1}
-        phase_properties: {"ferrite": {"E": 210000, "sigma_y": 200}, ...}
-        method: "voigt" (upper bound), "reuss" (lower bound), "hill" (average)
+    Parameters
+    ----------
+    phase_fractions : dict[str, float]
+        {"ferrite": 0.7, "pearlite": 0.2, "bainite": 0.1}
+    phase_properties : dict[str, dict[str, float]]
+        {"ferrite": {"E": 210000, "sigma_y": 200}, ...}
+    method : str
+        "voigt" (upper bound), "reuss" (lower bound), "hill" (average)
 
-    Returns:
+    Returns
+    -------
+    dict[str, float]
         Dict of effective properties {"E": ..., "sigma_y": ..., ...}
     """
     # Get all property names from first phase
@@ -165,14 +183,22 @@ def micro_to_meso_properties(
 
     Combines Hall-Petch grain-size strengthening with dislocation hardening.
 
-    Args:
-        grain_size_um: Average grain size (μm)
-        dislocation_density: ρ (1/m²)
-        phase_fractions: Optional phase composition
-        hall_petch: Hall-Petch parameters (default: low-carbon steel)
-        dislocation_params: Dislocation model parameters (default: BCC iron)
+    Parameters
+    ----------
+    grain_size_um : float
+        Average grain size (μm)
+    dislocation_density : float
+        ρ (1/m²)
+    phase_fractions : dict[str, float] | None
+        Optional phase composition
+    hall_petch : HallPetchParams | None
+        Hall-Petch parameters (default: low-carbon steel)
+    dislocation_params : DislocationDensityParams | None
+        Dislocation model parameters (default: BCC iron)
 
-    Returns:
+    Returns
+    -------
+    dict[str, float]
         Dict with yield_strength, hardening_contribution, total_strength
     """
     hp = hall_petch or HALL_PETCH_LOW_CARBON_STEEL
@@ -204,11 +230,16 @@ def estimate_grain_size_from_cooling(
     Faster cooling → finer grain structure (more nucleation sites).
     Empirical correlation: d ∝ (cooling_rate)^(-0.5)
 
-    Args:
-        cooling_rate: Cooling rate (C/s)
-        initial_austenite_grain_um: Prior austenite grain size (μm)
+    Parameters
+    ----------
+    cooling_rate : float
+        Cooling rate (C/s)
+    initial_austenite_grain_um : float
+        Prior austenite grain size (μm)
 
-    Returns:
+    Returns
+    -------
+    float
         Estimated grain size (μm)
     """
     # Reference: at 1 C/s, grain size ≈ initial_austenite_grain * 0.6
@@ -225,10 +256,14 @@ def phase_dependent_elastic_modulus(
     E is relatively insensitive to microstructure in steel (~200-210 GPa),
     but martensite can be slightly stiffer.
 
-    Args:
-        phase_fractions: Phase fractions dict
+    Parameters
+    ----------
+    phase_fractions : dict[str, float]
+        Phase fractions dict
 
-    Returns:
+    Returns
+    -------
+    float
         Effective elastic modulus (MPa)
     """
     E_phases = {

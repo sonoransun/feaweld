@@ -176,14 +176,14 @@ def build_feature_matrix(
     feature_dicts: list[dict[str, float]],
     target_lives: list[float] | None = None,
 ) -> FatigueFeatures:
-    """Combine multiple feature dicts into a :class:`FatigueFeatures` matrix.
+    """Combine multiple feature dicts into a [FatigueFeatures][feaweld.ml.features.FatigueFeatures] matrix.
 
     Missing features are filled with ``NaN``.
 
     Parameters
     ----------
     feature_dicts : list[dict[str, float]]
-        One dict per analysis, as returned by :func:`extract_features`.
+        One dict per analysis, as returned by [extract_features][feaweld.ml.features.extract_features].
     target_lives : list[float] | None
         Raw fatigue lives *N*.  Stored as ``log10(N)`` in the target array.
 

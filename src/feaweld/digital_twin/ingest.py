@@ -69,11 +69,16 @@ class SensorDataBuffer:
 
         Interpolates to common time grid with spacing dt.
 
-        Args:
-            channels: List of (sensor_id, channel) tuples
-            dt: Time step for alignment (seconds)
+        Parameters
+        ----------
+        channels : list[tuple[str, str]]
+            List of (sensor_id, channel) tuples
+        dt : float
+            Time step for alignment (seconds)
 
-        Returns:
+        Returns
+        -------
+        tuple[NDArray, NDArray]
             (times, values) where values is (n_times, n_channels)
         """
         all_data = []
@@ -261,11 +266,16 @@ class OPCUASensorSource(SensorSource):
 def parse_thermocouple_array(raw_values: list[float], positions_mm: list[float]) -> dict:
     """Parse thermocouple array data.
 
-    Args:
-        raw_values: Temperature readings (C) from each thermocouple
-        positions_mm: Position of each thermocouple from weld center (mm)
+    Parameters
+    ----------
+    raw_values : list[float]
+        Temperature readings (C) from each thermocouple
+    positions_mm : list[float]
+        Position of each thermocouple from weld center (mm)
 
-    Returns:
+    Returns
+    -------
+    dict
         Dict with temperatures, positions, peak_temp, peak_position, gradient
     """
     temps = np.array(raw_values)
@@ -290,12 +300,18 @@ def parse_arc_waveform(
 ) -> dict:
     """Parse welding arc current/voltage waveforms.
 
-    Args:
-        current: Arc current samples (A)
-        voltage: Arc voltage samples (V)
-        sample_rate: Samples per second
+    Parameters
+    ----------
+    current : NDArray
+        Arc current samples (A)
+    voltage : NDArray
+        Arc voltage samples (V)
+    sample_rate : float
+        Samples per second
 
-    Returns:
+    Returns
+    -------
+    dict
         Dict with mean/rms current and voltage, power, heat input estimate
     """
     i_mean = float(np.mean(current))

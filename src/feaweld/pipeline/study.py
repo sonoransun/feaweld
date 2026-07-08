@@ -135,6 +135,13 @@ class Study:
         else:
             cases = self._oat_cases()
 
+        # When no parameters are swept, the grid/OAT builders emit a synthetic
+        # "baseline" copy of the base case. That placeholder is meaningful only
+        # for a bare study; if explicit cases were added it would duplicate
+        # (and re-run) a real case under a phantom name, so drop it.
+        if self._extra_cases and not self._sweeps:
+            cases = {}
+
         # Add extra named cases
         cases.update(self._extra_cases)
         return cases
@@ -196,12 +203,18 @@ class Study:
     ) -> StudyResults:
         """Execute all cases concurrently.
 
-        Args:
-            max_workers: Number of parallel processes.
-            mode: "grid" for factorial, "one_at_a_time" for OAT.
-            progress_callback: Called with (case_name, completed, total).
+        Parameters
+        ----------
+        max_workers : int
+            Number of parallel processes.
+        mode : str
+            "grid" for factorial, "one_at_a_time" for OAT.
+        progress_callback : Callable[[str, int, int], None] | None
+            Called with (case_name, completed, total).
 
-        Returns:
+        Returns
+        -------
+        StudyResults
             StudyResults containing all results and errors.
         """
         case_dict = self._generate_cases(mode)

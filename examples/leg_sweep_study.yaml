@@ -1,0 +1,36 @@
+# Parametric study: effect of fillet weld leg size on fatigue life.
+#
+# Ready-made copy of the study walked through in
+# docs/tutorials/02_parametric_study.md. Run it with:
+#
+#     feaweld study run examples/leg_sweep_study.yaml -j 4
+#
+# `base_case` is a full inline AnalysisCase (feaweld.pipeline.study.StudyConfig
+# nests the whole case — a path string is NOT accepted here). Each entry under
+# `parameters` is a dot-path into that case plus the values to sweep.
+
+name: weld_leg_sweep
+description: Effect of fillet weld leg size on fatigue life
+mode: grid             # grid = Cartesian product of sweeps; one_at_a_time = vary one field at a time
+max_workers: 4
+
+base_case:
+  name: base
+  material: {base_metal: A36, weld_metal: E70XX}
+  geometry:
+    joint_type: fillet_t
+    base_width: 200.0
+    base_thickness: 20.0
+    web_height: 100.0
+    web_thickness: 10.0
+    weld_leg_size: 8.0   # placeholder, overridden by the sweep below
+  mesh: {global_size: 2.0, weld_toe_size: 0.2, element_order: 2}
+  solver: {solver_type: linear_elastic, backend: auto}
+  load: {axial_force: 50000.0}
+  postprocess:
+    stress_methods: [hotspot_linear, structural_dong]
+    sn_curve: IIW_FAT90
+
+parameters:
+  - name: geometry.weld_leg_size
+    values: [6.0, 8.0, 10.0, 12.0]

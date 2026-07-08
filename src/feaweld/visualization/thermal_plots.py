@@ -2,7 +2,7 @@
 
 Provides 3-D PyVista rendering of the Goldak double-ellipsoid heat
 source at an instantaneous moment and along a traveling path. Temperature
-field utilities from :mod:`feaweld.visualization.stress_plots`
+field utilities from [feaweld.visualization.stress_plots][]
 (``plot_temperature_field``) cover solved fields; this module focuses on
 the source-term itself, which is useful for validating welding-process
 input before running a transient solve.
@@ -71,7 +71,7 @@ def render_goldak_source(
     torch position (``start_position + direction * travel_speed * t``).
     An iso-surface at ``iso_fraction`` of the peak power density is
     rendered in the ``temperature`` colormap. If an optional ``mesh`` is
-    supplied (an :class:`~feaweld.core.types.FEMesh`), its outline is
+    supplied (an [FEMesh][feaweld.core.types.FEMesh]), its outline is
     drawn as a translucent wireframe for spatial context.
 
     Parameters
@@ -157,3 +157,84 @@ def render_goldak_source(
         plotter.show()
 
     return plotter
+
+
+# ---------------------------------------------------------------------------
+# Temperature time-history (2-D Matplotlib)
+# ---------------------------------------------------------------------------
+
+def plot_temperature_history(
+    times: NDArray,
+    temperatures: NDArray,
+    *,
+    node_label: str = "peak node",
+    title: str | None = None,
+    show: bool = True,
+    ax: Any = None,
+) -> Any:
+    """Line plot of a nodal temperature time-history.
+
+    For a 1-D *temperatures* array the single series is plotted directly.
+    For a 2-D array ``(n_steps, n_nodes)`` the column containing the global
+    peak temperature is selected and labelled.
+
+    Parameters
+    ----------
+    times : numpy.ndarray
+        Time values (s), shape ``(n_steps,)``.
+    temperatures : numpy.ndarray
+        Temperatures (C).  Either ``(n_steps,)`` for a single node or
+        ``(n_steps, n_nodes)`` for a field, in which case the hottest node is
+        shown.
+    node_label : str
+        Base label for the plotted series.
+    title : str, optional
+        Plot title.
+    show : bool
+        Call ``plt.show()`` when *True*.
+    ax : matplotlib.axes.Axes, optional
+        Reuse an existing Axes; a new Figure is created when *None*.
+
+    Returns
+    -------
+    matplotlib.figure.Figure
+    """
+    from feaweld.visualization.plots_2d import _require_matplotlib, _prepare_axes
+    from feaweld.visualization.theme import FEAWELD_RED, FEAWELD_ORANGE
+
+    plt = _require_matplotlib()
+    fig, ax = _prepare_axes(plt, ax, title or "Temperature History")
+
+    t = np.asarray(times, dtype=np.float64)
+    temps = np.asarray(temperatures, dtype=np.float64)
+
+    if temps.ndim == 2:
+        # Select the node holding the global maximum temperature.
+        node_idx = int(np.argmax(np.max(temps, axis=0)))
+        series = temps[:, node_idx]
+        label = f"{node_label} (node {node_idx})"
+    else:
+        series = temps
+        label = node_label
+
+    ax.plot(t, series, color=FEAWELD_RED, linewidth=1.6, label=label)
+
+    # Mark the peak temperature.
+    peak_idx = int(np.argmax(series))
+    ax.plot(t[peak_idx], series[peak_idx], "o", color=FEAWELD_ORANGE, markersize=7, zorder=5)
+    ax.annotate(
+        f"peak {series[peak_idx]:.0f} °C",
+        xy=(t[peak_idx], series[peak_idx]),
+        xytext=(6, 6), textcoords="offset points",
+        fontsize=8, color=FEAWELD_ORANGE, fontweight="bold",
+    )
+
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel("Temperature (°C)")
+    ax.legend(loc="best", fontsize="small")
+    ax.grid(True, linestyle=":", alpha=0.5)
+    fig.tight_layout()
+
+    if show:
+        plt.show()
+    return fig

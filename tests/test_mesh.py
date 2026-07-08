@@ -82,6 +82,25 @@ class TestGenerateMesh:
         has_groups = len(mesh.physical_groups) > 0 or len(mesh.node_sets) > 0
         assert has_groups, "No physical groups or node sets in the mesh"
 
+    def test_weld_toe_node_set_populated(self):
+        joint = _make_joint()
+        cfg = _quick_config()
+        mesh = generate_mesh(joint, cfg)
+
+        assert "weld_toe" in mesh.node_sets
+        toe_nodes = mesh.node_sets["weld_toe"]
+        assert toe_nodes.dtype == np.int64
+        assert len(toe_nodes) > 0
+        # No duplicates.
+        assert len(np.unique(toe_nodes)) == len(toe_nodes)
+
+        # Every analytic toe point has a set node within one toe-element size.
+        toe_pts = np.array(joint.get_weld_toe_points())
+        toe_coords = mesh.nodes[toe_nodes]
+        for p in toe_pts:
+            nearest = np.linalg.norm(toe_coords - p, axis=1).min()
+            assert nearest <= cfg.weld_toe_size
+
     def test_quadratic_elements(self):
         cfg = _quick_config()
         cfg.element_order = 2

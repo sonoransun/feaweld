@@ -50,11 +50,16 @@ def compute_sed_field(
 
     Simplified to W = σ_vm² / (2E) for von Mises-based estimate.
 
-    Args:
-        results: FEA results with stress field
-        elastic_modulus: E (MPa)
+    Parameters
+    ----------
+    results : FEAResults
+        FEA results with stress field
+    elastic_modulus : float
+        E (MPa)
 
-    Returns:
+    Returns
+    -------
+    NDArray[np.float64]
         SED values at each node (MJ/m³ = MPa)
     """
     if results.stress is None:
@@ -77,14 +82,22 @@ def averaged_sed(
 
     The control volume is centered at the notch tip (weld toe) with radius R₀.
 
-    Args:
-        results: FEA results with stress field
-        center_point: Center of control volume (weld toe/root location)
-        control_radius: R₀ (mm)
-        elastic_modulus: E (MPa)
-        poisson_ratio: ν
+    Parameters
+    ----------
+    results : FEAResults
+        FEA results with stress field
+    center_point : NDArray[np.float64]
+        Center of control volume (weld toe/root location)
+    control_radius : float
+        R₀ (mm)
+    elastic_modulus : float
+        E (MPa)
+    poisson_ratio : float
+        ν
 
-    Returns:
+    Returns
+    -------
+    SEDResult
         SEDResult with averaged SED and volume.
     """
     if results.stress is None:
@@ -140,13 +153,20 @@ def sed_fatigue_life(
 
     where W_ref is the SED at reference life N_ref.
 
-    Args:
-        sed_result: SEDResult from averaged_sed
-        W_ref: Reference SED at N_ref cycles (MJ/m³)
-        N_ref: Reference fatigue life (default 2e6 cycles)
-        slope: SED-life curve slope (typically ~1.5 for steel)
+    Parameters
+    ----------
+    sed_result : SEDResult
+        SEDResult from averaged_sed
+    W_ref : float
+        Reference SED at N_ref cycles (MJ/m³)
+    N_ref : float
+        Reference fatigue life (default 2e6 cycles)
+    slope : float
+        SED-life curve slope (typically ~1.5 for steel)
 
-    Returns:
+    Returns
+    -------
+    SEDResult
         Updated SEDResult with fatigue_life.
     """
     if sed_result.averaged_sed > 0:
@@ -175,12 +195,18 @@ def estimate_control_radius(
 
     where K_Ic is fracture toughness.
 
-    Args:
-        fracture_toughness: K_Ic (MPa·√mm)
-        ultimate_strength: σ_u (MPa)
-        elastic_modulus: E (MPa)
+    Parameters
+    ----------
+    fracture_toughness : float
+        K_Ic (MPa·√mm)
+    ultimate_strength : float
+        σ_u (MPa)
+    elastic_modulus : float
+        E (MPa)
 
-    Returns:
+    Returns
+    -------
+    float
         Estimated R₀ (mm)
     """
     return (fracture_toughness / ultimate_strength) ** 2 / (4.0 * np.pi)

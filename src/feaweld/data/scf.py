@@ -32,14 +32,20 @@ class SCFCoefficients:
 def get_scf_coefficients(geometry: str) -> SCFCoefficients:
     """Look up SCF parametric coefficients by geometry name.
 
-    Args:
-        geometry: Geometry identifier (e.g. ``"fillet_toe"``, ``"butt_toe"``).
+    Parameters
+    ----------
+    geometry : str
+        Geometry identifier (e.g. ``"fillet_toe"``, ``"butt_toe"``).
 
-    Returns:
+    Returns
+    -------
+    SCFCoefficients
         SCFCoefficients dataclass.
 
-    Raises:
-        KeyError: If the geometry is not found in the dataset.
+    Raises
+    ------
+    KeyError
+        If the geometry is not found in the dataset.
     """
     data = get_cache().get("scf/parametric_coefficients")
     for entry in data:
@@ -67,13 +73,20 @@ def compute_scf(
     Uses the parametric formula:
         K_t = 1 + a * (t / rho)^b * (theta / pi)^c
 
-    Args:
-        geometry: Geometry identifier (e.g. ``"fillet_toe"``).
-        toe_radius: Weld toe radius in mm.  Clamped to >= 0.01 mm.
-        toe_angle: Weld toe angle in degrees.
-        plate_thickness: Plate thickness in mm.
+    Parameters
+    ----------
+    geometry : str
+        Geometry identifier (e.g. ``"fillet_toe"``).
+    toe_radius : float
+        Weld toe radius in mm.  Clamped to >= 0.01 mm.
+    toe_angle : float
+        Weld toe angle in degrees.
+    plate_thickness : float
+        Plate thickness in mm.
 
-    Returns:
+    Returns
+    -------
+    float
         Stress concentration factor K_t (dimensionless, >= 1.0).
     """
     coeff = get_scf_coefficients(geometry)

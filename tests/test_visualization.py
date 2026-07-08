@@ -5,9 +5,11 @@ PyVista-dependent tests are skipped when pyvista is not installed.
 
 from __future__ import annotations
 
+import base64
 import math
 import os
 import tempfile
+import types
 
 import numpy as np
 import pytest
@@ -17,13 +19,34 @@ from feaweld.core.types import ElementType, FEAResults, FEMesh, StressField
 # Guard: skip pyvista-dependent tests when the library is not available.
 pyvista = pytest.importorskip("pyvista")
 
-from feaweld.visualization.export import export_vtk
+from feaweld.visualization.export import export_gltf, export_png, export_vtk
 from feaweld.visualization.fatigue_maps import plot_damage, plot_fatigue_life
+from feaweld.visualization.report_figures import plotter_to_base64
 from feaweld.visualization.stress_plots import (
     plot_deformed,
     plot_stress_field,
     plot_temperature_field,
+    resolve_component,
+    resolve_grid,
     stress_field_to_pyvista,
+)
+from feaweld.visualization import enhanced_3d as e3
+
+
+def _can_screenshot() -> bool:
+    """True when an off-screen render backend is available on this machine."""
+    try:
+        pl = pyvista.Plotter(off_screen=True)
+        pl.add_mesh(pyvista.Sphere())
+        pl.screenshot(return_img=True)
+        pl.close()
+        return True
+    except Exception:
+        return False
+
+
+requires_render = pytest.mark.skipif(
+    not _can_screenshot(), reason="no off-screen render backend"
 )
 
 
@@ -71,6 +94,54 @@ def _make_results(mesh: FEMesh) -> FEAResults:
         stress=stress,
         temperature=temp,
     )
+
+
+def _make_tet_mesh(n: int = 4) -> FEMesh:
+    """A structured cube split into TET4 elements, with weld/toe sets.
+
+    Four nodes per axis (64 nodes) keeps the default-median threshold split
+    non-empty in both directions, so the ``above``/``below`` filters both
+    produce renderable sub-meshes.
+    """
+    xs = np.linspace(0.0, 1.0, n)
+    idx: dict[tuple[int, int, int], int] = {}
+    pts: list[list[float]] = []
+    for k in range(n):
+        for j in range(n):
+            for i in range(n):
+                idx[(i, j, k)] = len(pts)
+                pts.append([xs[i], xs[j], xs[k]])
+    tets: list[list[int]] = []
+    for k in range(n - 1):
+        for j in range(n - 1):
+            for i in range(n - 1):
+                c = [
+                    idx[(i, j, k)], idx[(i + 1, j, k)],
+                    idx[(i, j + 1, k)], idx[(i + 1, j + 1, k)],
+                    idx[(i, j, k + 1)], idx[(i + 1, j, k + 1)],
+                    idx[(i, j + 1, k + 1)], idx[(i + 1, j + 1, k + 1)],
+                ]
+                tets += [
+                    [c[0], c[1], c[3], c[7]], [c[0], c[1], c[7], c[5]],
+                    [c[0], c[5], c[7], c[4]], [c[0], c[3], c[2], c[7]],
+                    [c[0], c[2], c[6], c[7]],
+                ]
+    return FEMesh(
+        nodes=np.array(pts, dtype=np.float64),
+        elements=np.array(tets, dtype=np.int64),
+        element_type=ElementType.TET4,
+        element_sets={"weld": np.array([0, 1, 2, 3, 4], dtype=np.int64)},
+        node_sets={"toe": np.array([0, 1, 2], dtype=np.int64)},
+    )
+
+
+def _make_gradient_stress(mesh: FEMesh) -> StressField:
+    """A spatially coherent stress field: sigma_yy rises with the y coordinate."""
+    y = mesh.nodes[:, 1]
+    vals = np.zeros((mesh.n_nodes, 6), dtype=np.float64)
+    vals[:, 1] = 50.0 + 150.0 * (y - y.min()) / max(float(np.ptp(y)), 1e-9)
+    vals[:, 0] = 0.2 * vals[:, 1]
+    return StressField(values=vals)
 
 
 # ---------------------------------------------------------------------------
@@ -242,3 +313,238 @@ class TestDamageAnimation:
             path = animate_damage_evolution(blocks, sn, out, fps=5)
             assert os.path.exists(str(path))
             assert os.path.getsize(str(path)) > 0
+
+
+# ---------------------------------------------------------------------------
+# Enhanced 3-D plotting (clipping / threshold / iso / vectors / weld / SED /
+# preview / annotated).  All run off-screen with show=False; a plotter is
+# returned and closed.  These build VTK filter pipelines and add meshes but do
+# not render, so they need pyvista (module-level importorskip) but not a GL
+# backend.
+# ---------------------------------------------------------------------------
+
+
+class TestEnhanced3D:
+
+    def test_clipping_default_origin(self) -> None:
+        mesh = _make_tet_mesh()
+        stress = _make_gradient_stress(mesh)
+        plotter = e3.plot_stress_with_clipping(mesh, stress, show=False)
+        assert plotter is not None
+        plotter.close()
+
+    def test_clipping_explicit_origin(self) -> None:
+        mesh = _make_tet_mesh()
+        stress = _make_gradient_stress(mesh)
+        plotter = e3.plot_stress_with_clipping(
+            mesh, stress, clip_origin=(0.5, 0.5, 0.5), show=False,
+        )
+        assert plotter is not None
+        plotter.close()
+
+    def test_threshold_above(self) -> None:
+        mesh = _make_tet_mesh()
+        stress = _make_gradient_stress(mesh)
+        plotter = e3.plot_stress_threshold(mesh, stress, above=True, show=False)
+        assert plotter is not None
+        plotter.close()
+
+    def test_threshold_below(self) -> None:
+        mesh = _make_tet_mesh()
+        stress = _make_gradient_stress(mesh)
+        plotter = e3.plot_stress_threshold(mesh, stress, above=False, show=False)
+        assert plotter is not None
+        plotter.close()
+
+    def test_threshold_explicit_value(self) -> None:
+        mesh = _make_tet_mesh()
+        stress = _make_gradient_stress(mesh)
+        plotter = e3.plot_stress_threshold(
+            mesh, stress, threshold=100.0, above=True, show=False,
+        )
+        assert plotter is not None
+        plotter.close()
+
+    def test_iso_single_value(self) -> None:
+        mesh = _make_tet_mesh()
+        stress = _make_gradient_stress(mesh)
+        plotter = e3.plot_iso_surface(mesh, stress, iso_values=[120.0], show=False)
+        assert plotter is not None
+        plotter.close()
+
+    def test_iso_multiple_values(self) -> None:
+        mesh = _make_tet_mesh()
+        stress = _make_gradient_stress(mesh)
+        plotter = e3.plot_iso_surface(
+            mesh, stress, iso_values=[80.0, 120.0, 160.0], show=False,
+        )
+        assert plotter is not None
+        plotter.close()
+
+    def test_iso_default_values(self) -> None:
+        mesh = _make_tet_mesh()
+        stress = _make_gradient_stress(mesh)
+        plotter = e3.plot_iso_surface(mesh, stress, show=False)
+        assert plotter is not None
+        plotter.close()
+
+    def test_iso_out_of_range_no_crash(self) -> None:
+        mesh = _make_tet_mesh()
+        stress = _make_gradient_stress(mesh)
+        # An iso-level well outside the field yields an empty contour that is
+        # skipped rather than crashing.
+        plotter = e3.plot_iso_surface(mesh, stress, iso_values=[1e9], show=False)
+        assert plotter is not None
+        plotter.close()
+
+    def test_force_vectors_happy_path(self) -> None:
+        mesh = _make_tet_mesh()
+        vectors = np.ones((mesh.n_nodes, 3), dtype=np.float64)
+        plotter = e3.plot_force_vectors(mesh, vectors, show=False)
+        assert plotter is not None
+        plotter.close()
+
+    def test_force_vectors_shape_mismatch(self) -> None:
+        mesh = _make_tet_mesh()
+        bad = np.ones((mesh.n_nodes + 1, 3), dtype=np.float64)
+        with pytest.raises(ValueError, match="vectors must have shape"):
+            e3.plot_force_vectors(mesh, bad, show=False)
+
+    def test_weld_region_present(self) -> None:
+        mesh = _make_tet_mesh()
+        stress = _make_gradient_stress(mesh)
+        plotter = e3.plot_weld_region_highlight(
+            mesh, stress, weld_region="weld", show=False,
+        )
+        assert plotter is not None
+        plotter.close()
+
+    def test_weld_region_absent(self) -> None:
+        mesh = _make_tet_mesh()
+        stress = _make_gradient_stress(mesh)
+        # Unknown region name: annotated with a warning label, no crash.
+        plotter = e3.plot_weld_region_highlight(
+            mesh, stress, weld_region="does_not_exist", show=False,
+        )
+        assert plotter is not None
+        plotter.close()
+
+    def test_sed_control_volume_no_result(self) -> None:
+        mesh = _make_tet_mesh()
+        stress = _make_gradient_stress(mesh)
+        plotter = e3.plot_sed_control_volume(
+            mesh, (0.5, 0.5, 0.5), 0.4, stress=stress, show=False,
+        )
+        assert plotter is not None
+        plotter.close()
+
+    def test_sed_control_volume_with_result_stub(self) -> None:
+        mesh = _make_tet_mesh()
+        stress = _make_gradient_stress(mesh)
+        sed_result = types.SimpleNamespace(
+            sed_field=np.linspace(0.1, 0.5, mesh.n_nodes),
+            averaged_sed=0.31,
+        )
+        plotter = e3.plot_sed_control_volume(
+            mesh, (0.5, 0.5, 0.5), 0.4,
+            sed_result=sed_result, stress=stress, show=False,
+        )
+        assert plotter is not None
+        plotter.close()
+
+    def test_mesh_preview_with_sets(self) -> None:
+        mesh = _make_tet_mesh()
+        plotter = e3.plot_mesh_preview(
+            mesh, highlight_sets={"weld": "tomato"}, show=False,
+        )
+        assert plotter is not None
+        plotter.close()
+
+    def test_mesh_preview_no_highlight(self) -> None:
+        mesh = _make_tet_mesh()
+        plotter = e3.plot_mesh_preview(mesh, show=False)
+        assert plotter is not None
+        plotter.close()
+
+    def test_annotated_femesh_path(self) -> None:
+        mesh = _make_tet_mesh()
+        stress = _make_gradient_stress(mesh)
+        plotter = e3.plot_annotated_stress(mesh, stress, show=False)
+        assert plotter is not None
+        plotter.close()
+
+    def test_annotated_grid_path(self) -> None:
+        mesh = _make_tet_mesh()
+        stress = _make_gradient_stress(mesh)
+        grid = stress_field_to_pyvista(mesh, stress)
+        plotter = e3.plot_annotated_stress(grid, show=False)
+        assert plotter is not None
+        plotter.close()
+
+
+class TestGridAcceptance:
+    """resolve_grid / resolve_component contract and grid-input passthrough."""
+
+    def test_plot_stress_field_accepts_grid(self) -> None:
+        mesh = _make_tri_mesh()
+        stress = _make_stress(mesh.n_nodes)
+        grid = stress_field_to_pyvista(mesh, stress)
+        plotter = plot_stress_field(grid, show=False)
+        assert plotter is not None
+        plotter.close()
+
+    def test_resolve_grid_passthrough_identity(self) -> None:
+        mesh = _make_tri_mesh()
+        stress = _make_stress(mesh.n_nodes)
+        grid = stress_field_to_pyvista(mesh, stress)
+        assert resolve_grid(grid) is grid
+
+    def test_resolve_grid_builds_from_femesh(self) -> None:
+        mesh = _make_tri_mesh()
+        stress = _make_stress(mesh.n_nodes)
+        grid = resolve_grid(mesh, stress)
+        assert grid.n_points == mesh.n_nodes
+        assert "von_mises" in grid.point_data
+
+    def test_resolve_component_known(self) -> None:
+        assert resolve_component("von_mises") == "von_mises"
+        assert resolve_component("xx") == "stress_xx"
+
+    def test_resolve_component_unknown_raises(self) -> None:
+        with pytest.raises(ValueError, match="Unknown component"):
+            resolve_component("bogus")
+
+
+@requires_render
+class TestExportAndScreenshots:
+    """Screenshot / export paths that require an actual off-screen GL backend."""
+
+    def test_plotter_to_base64_png_magic(self) -> None:
+        mesh = _make_tri_mesh()
+        stress = _make_stress(mesh.n_nodes)
+        plotter = plot_stress_field(mesh, stress, show=False)
+        b64 = plotter_to_base64(plotter)
+        raw = base64.b64decode(b64)
+        assert raw[:4] == b"\x89PNG"
+
+    def test_export_png_writes_nested(self) -> None:
+        mesh = _make_tri_mesh()
+        stress = _make_stress(mesh.n_nodes)
+        plotter = plot_stress_field(mesh, stress, show=False)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "nested", "shot.png")
+            export_png(plotter, path)
+            assert os.path.isfile(path)
+            assert os.path.getsize(path) > 0
+        plotter.close()
+
+    def test_export_gltf_writes(self) -> None:
+        mesh = _make_tri_mesh()
+        stress = _make_stress(mesh.n_nodes)
+        plotter = plot_stress_field(mesh, stress, show=False)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "scene.gltf")
+            export_gltf(plotter, path)
+            assert os.path.isfile(path)
+            assert os.path.getsize(path) > 0
+        plotter.close()

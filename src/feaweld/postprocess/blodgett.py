@@ -409,7 +409,7 @@ def asd_capacity(
         Electrode tensile strength (MPa). Default 483 MPa = E70XX (70 ksi).
         Ignored if *filler* is provided.
     filler : str, optional
-        AWS filler metal classification. See :func:`lrfd_capacity`.
+        AWS filler metal classification. See [lrfd_capacity][feaweld.postprocess.blodgett.lrfd_capacity].
 
     Returns
     -------

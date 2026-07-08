@@ -1,6 +1,6 @@
 """Enhanced 3D visualization functions for feaweld FEA results.
 
-Extends the base PyVista visualization in :mod:`stress_plots` with clipping
+Extends the base PyVista visualization in [stress_plots][feaweld.visualization.stress_plots] with clipping
 planes, threshold filtering, iso-surfaces, force-vector glyphs, weld-region
 highlighting, SED control-volume rendering, mesh previews, and annotated
 stress plots.
@@ -18,33 +18,7 @@ from numpy.typing import NDArray
 
 from feaweld.core.types import FEMesh, StressField
 from feaweld.visualization.theme import get_cmap, configure_plotter
-
-
-# Map user-friendly component names to point-data keys (mirrors stress_plots).
-_COMPONENT_MAP: dict[str, str] = {
-    "von_mises": "von_mises",
-    "tresca": "tresca",
-    "xx": "stress_xx",
-    "yy": "stress_yy",
-    "zz": "stress_zz",
-    "xy": "stress_xy",
-    "yz": "stress_yz",
-    "xz": "stress_xz",
-    "principal_1": "principal_1",
-    "principal_2": "principal_2",
-    "principal_3": "principal_3",
-}
-
-
-def _resolve_component(component: str) -> str:
-    """Resolve a user-friendly component name to the point-data key."""
-    key = _COMPONENT_MAP.get(component)
-    if key is None:
-        raise ValueError(
-            f"Unknown component '{component}'. "
-            f"Choose from: {list(_COMPONENT_MAP)}"
-        )
-    return key
+from feaweld.visualization.stress_plots import resolve_component, resolve_grid
 
 
 # ---------------------------------------------------------------------------
@@ -52,8 +26,8 @@ def _resolve_component(component: str) -> str:
 # ---------------------------------------------------------------------------
 
 def plot_stress_with_clipping(
-    mesh: FEMesh,
-    stress: StressField,
+    mesh: Any,
+    stress: StressField | None = None,
     clip_normal: tuple[float, float, float] = (1.0, 0.0, 0.0),
     clip_origin: tuple[float, float, float] | None = None,
     component: str = "von_mises",
@@ -68,17 +42,17 @@ def plot_stress_with_clipping(
 
     Parameters
     ----------
-    mesh:
-        Finite-element mesh.
-    stress:
-        Nodal stress field.
-    clip_normal:
+    mesh : feaweld.core.types.FEMesh or pyvista.DataSet
+        Finite-element mesh, or a ready PyVista grid.
+    stress : feaweld.core.types.StressField, optional
+        Nodal stress field.  Required when *mesh* is an [FEMesh][feaweld.core.types.FEMesh].
+    clip_normal : tuple of float
         Normal vector of the clipping plane.
-    clip_origin:
+    clip_origin : tuple of float, optional
         A point on the clipping plane.  Defaults to the mesh centroid.
-    component:
+    component : str
         Stress component to display.
-    show:
+    show : bool
         Open an interactive window.
 
     Returns
@@ -86,11 +60,10 @@ def plot_stress_with_clipping(
     pyvista.Plotter
     """
     import pyvista as pv
-    from feaweld.visualization.stress_plots import stress_field_to_pyvista
 
-    scalar_key = _resolve_component(component)
+    scalar_key = resolve_component(component)
 
-    grid = stress_field_to_pyvista(mesh, stress)
+    grid = resolve_grid(mesh, stress)
 
     if clip_origin is None:
         clip_origin = tuple(grid.center)
@@ -133,9 +106,9 @@ def plot_stress_with_clipping(
 # ---------------------------------------------------------------------------
 
 def plot_stress_threshold(
-    mesh: FEMesh,
-    stress: StressField,
-    threshold: float,
+    mesh: Any,
+    stress: StressField | None = None,
+    threshold: float | None = None,
     component: str = "von_mises",
     above: bool = True,
     show: bool = True,
@@ -148,18 +121,19 @@ def plot_stress_threshold(
 
     Parameters
     ----------
-    mesh:
-        Finite-element mesh.
-    stress:
-        Nodal stress field.
-    threshold:
-        Scalar threshold value (same units as the stress component).
-    component:
+    mesh : feaweld.core.types.FEMesh or pyvista.DataSet
+        Finite-element mesh, or a ready PyVista grid.
+    stress : feaweld.core.types.StressField, optional
+        Nodal stress field.  Required when *mesh* is an [FEMesh][feaweld.core.types.FEMesh].
+    threshold : float, optional
+        Scalar threshold value (same units as the stress component).  When
+        ``None`` the median of the component field is used.
+    component : str
         Stress component to filter on.
-    above:
+    above : bool
         If *True*, show the region **above** *threshold*; otherwise show the
         region **below** it.
-    show:
+    show : bool
         Open an interactive window.
 
     Returns
@@ -167,12 +141,14 @@ def plot_stress_threshold(
     pyvista.Plotter
     """
     import pyvista as pv
-    from feaweld.visualization.stress_plots import stress_field_to_pyvista
 
-    scalar_key = _resolve_component(component)
+    scalar_key = resolve_component(component)
 
-    grid = stress_field_to_pyvista(mesh, stress)
+    grid = resolve_grid(mesh, stress)
     grid.set_active_scalars(scalar_key)
+
+    if threshold is None:
+        threshold = float(np.median(np.asarray(grid.point_data[scalar_key])))
 
     thresholded = grid.threshold(
         value=threshold,
@@ -192,18 +168,28 @@ def plot_stress_threshold(
         show_scalar_bar=False,
     )
 
-    # Thresholded region, opaque with scalar bar.
-    plotter.add_mesh(
-        thresholded,
-        scalars=scalar_key,
-        cmap=kwargs.pop("threshold_cmap", get_cmap("stress")),
-        show_scalar_bar=True,
-        scalar_bar_args={
-            "title": f"{component.replace('_', ' ').title()} "
-                     f"({'>' if above else '<'} {threshold:.1f})",
-        },
-        **kwargs,
-    )
+    # Thresholded region, opaque with scalar bar. The region can be empty
+    # (no cells satisfy the criterion) — pyvista refuses to plot an empty
+    # mesh, so annotate instead of crashing.
+    if thresholded.n_points > 0:
+        plotter.add_mesh(
+            thresholded,
+            scalars=scalar_key,
+            cmap=kwargs.pop("threshold_cmap", get_cmap("stress")),
+            show_scalar_bar=True,
+            scalar_bar_args={
+                "title": f"{component.replace('_', ' ').title()} "
+                         f"({'>' if above else '<'} {threshold:.1f})",
+            },
+            **kwargs,
+        )
+    else:
+        plotter.add_text(
+            f"No region with {component} "
+            f"{'>' if above else '<'} {threshold:.1f}",
+            font_size=12,
+            color="gray",
+        )
 
     plotter.add_axes()
     if show:
@@ -216,9 +202,9 @@ def plot_stress_threshold(
 # ---------------------------------------------------------------------------
 
 def plot_iso_surface(
-    mesh: FEMesh,
-    stress: StressField,
-    iso_values: list[float] | NDArray,
+    mesh: Any,
+    stress: StressField | None = None,
+    iso_values: list[float] | NDArray | None = None,
     component: str = "von_mises",
     show: bool = True,
     **kwargs: Any,
@@ -230,15 +216,16 @@ def plot_iso_surface(
 
     Parameters
     ----------
-    mesh:
-        Finite-element mesh (volumetric elements recommended).
-    stress:
-        Nodal stress field.
-    iso_values:
-        One or more iso-surface levels.
-    component:
+    mesh : feaweld.core.types.FEMesh or pyvista.DataSet
+        Finite-element mesh (volumetric elements recommended), or a ready grid.
+    stress : feaweld.core.types.StressField, optional
+        Nodal stress field.  Required when *mesh* is an [FEMesh][feaweld.core.types.FEMesh].
+    iso_values : list of float or numpy.ndarray, optional
+        One or more iso-surface levels.  When ``None`` three levels spanning
+        the inter-quartile range of the component field are used.
+    component : str
         Stress component to contour.
-    show:
+    show : bool
         Open an interactive window.
 
     Returns
@@ -246,12 +233,19 @@ def plot_iso_surface(
     pyvista.Plotter
     """
     import pyvista as pv
-    from feaweld.visualization.stress_plots import stress_field_to_pyvista
 
-    scalar_key = _resolve_component(component)
+    scalar_key = resolve_component(component)
 
-    grid = stress_field_to_pyvista(mesh, stress)
+    grid = resolve_grid(mesh, stress)
     grid.set_active_scalars(scalar_key)
+
+    if iso_values is None:
+        field = np.asarray(grid.point_data[scalar_key])
+        iso_values = np.linspace(
+            float(np.percentile(field, 25)),
+            float(np.percentile(field, 75)),
+            3,
+        )
 
     plotter = pv.Plotter(off_screen=not show)
     configure_plotter(plotter)
@@ -382,7 +376,7 @@ def plot_force_vectors(
 # ---------------------------------------------------------------------------
 
 def plot_weld_region_highlight(
-    mesh: FEMesh,
+    mesh: Any,
     stress: StressField | None = None,
     weld_region: str = "weld",
     show: bool = True,
@@ -396,14 +390,15 @@ def plot_weld_region_highlight(
 
     Parameters
     ----------
-    mesh:
-        Finite-element mesh.
-    stress:
+    mesh : feaweld.core.types.FEMesh or pyvista.DataSet
+        Finite-element mesh, or a ready PyVista grid.  Region lookup requires
+        an [FEMesh][feaweld.core.types.FEMesh]; a raw grid is rendered without a highlight.
+    stress : feaweld.core.types.StressField, optional
         Optional stress field.  When provided, the weld sub-mesh is coloured
         by von-Mises stress; otherwise a solid highlight colour is used.
-    weld_region:
+    weld_region : str
         Name of the physical group or element set identifying the weld.
-    show:
+    show : bool
         Open an interactive window.
 
     Returns
@@ -411,22 +406,15 @@ def plot_weld_region_highlight(
     pyvista.Plotter
     """
     import pyvista as pv
-    from feaweld.visualization.stress_plots import (
-        stress_field_to_pyvista,
-        _mesh_to_pyvista_grid,
-    )
 
     # Build the full grid (with or without stress data).
-    if stress is not None:
-        grid = stress_field_to_pyvista(mesh, stress)
-    else:
-        grid = _mesh_to_pyvista_grid(mesh)
+    grid = resolve_grid(mesh, stress)
 
-    # Locate the weld element indices.
+    # Locate the weld element indices (only possible for an FEMesh).
     weld_elem_ids: NDArray[np.int64] | None = None
-    if weld_region in mesh.physical_groups:
+    if hasattr(mesh, "physical_groups") and weld_region in mesh.physical_groups:
         weld_elem_ids = mesh.physical_groups[weld_region]
-    elif weld_region in mesh.element_sets:
+    elif hasattr(mesh, "element_sets") and weld_region in mesh.element_sets:
         weld_elem_ids = mesh.element_sets[weld_region]
 
     plotter = pv.Plotter(off_screen=not show)
@@ -481,7 +469,7 @@ def plot_weld_region_highlight(
 # ---------------------------------------------------------------------------
 
 def plot_sed_control_volume(
-    mesh: FEMesh,
+    mesh: Any,
     center_point: tuple[float, float, float] | NDArray,
     control_radius: float,
     sed_result: Any | None = None,
@@ -505,7 +493,7 @@ def plot_sed_control_volume(
     control_radius:
         Radius R_0 of the averaging control volume (mesh length units).
     sed_result:
-        An :class:`~feaweld.postprocess.sed.SEDResult` instance.  If its
+        An [SEDResult][feaweld.postprocess.sed.SEDResult] instance.  If its
         ``sed_field`` attribute is populated the clipped region is coloured
         by SED; otherwise von-Mises stress is used (when *stress* is given).
     stress:
@@ -518,18 +506,11 @@ def plot_sed_control_volume(
     pyvista.Plotter
     """
     import pyvista as pv
-    from feaweld.visualization.stress_plots import (
-        stress_field_to_pyvista,
-        _mesh_to_pyvista_grid,
-    )
 
     center = np.asarray(center_point, dtype=np.float64).ravel()
 
     # Build grid.
-    if stress is not None:
-        grid = stress_field_to_pyvista(mesh, stress)
-    else:
-        grid = _mesh_to_pyvista_grid(mesh)
+    grid = resolve_grid(mesh, stress)
 
     # Attach SED field if available.
     has_sed_field = False
@@ -715,9 +696,60 @@ def plot_mesh_preview(
 # 8. Annotated stress plot
 # ---------------------------------------------------------------------------
 
+def _critical_points_from_grid(
+    grid: Any,
+    scalar_key: str,
+    n_max: int,
+) -> list[Any]:
+    """Build critical-point annotations from a raw grid's scalar array.
+
+    Used when [plot_annotated_stress][feaweld.visualization.enhanced_3d.plot_annotated_stress] is handed a ready PyVista grid
+    (rather than an ``FEMesh``/``StressField`` pair), so the mesh-based
+    [find_critical_points][feaweld.visualization.annotations.find_critical_points] cannot be
+    called.  Selects the top *n_max* points by the *scalar_key* array.
+
+    Parameters
+    ----------
+    grid : pyvista.DataSet
+        Grid carrying the ``scalar_key`` point-data array.
+    scalar_key : str
+        Point-data key to rank points by.
+    n_max : int
+        Maximum number of points to return.
+
+    Returns
+    -------
+    list of feaweld.visualization.annotations.CriticalPoint
+        Ranked descending by value; the top point is ``"warning"`` severity,
+        the rest ``"info"``.
+    """
+    from feaweld.visualization.annotations import (
+        CriticalPoint,
+        format_engineering_value,
+    )
+
+    values = np.asarray(grid.point_data[scalar_key], dtype=np.float64)
+    points = np.asarray(grid.points, dtype=np.float64)
+    top_indices = np.argsort(values)[::-1][:n_max]
+
+    result: list[CriticalPoint] = []
+    for rank, idx in enumerate(top_indices):
+        val = float(values[idx])
+        label = format_engineering_value(val, "MPa")
+        label = f"Max: {label}" if rank == 0 else label
+        result.append(CriticalPoint(
+            location=points[idx].copy(),
+            value=val,
+            label=label,
+            severity="warning" if rank == 0 else "info",
+            category="stress",
+        ))
+    return result
+
+
 def plot_annotated_stress(
-    mesh: FEMesh,
-    stress: StressField,
+    mesh: Any,
+    stress: StressField | None = None,
     annotations: list[Any] | None = None,
     component: str = "von_mises",
     show: bool = True,
@@ -725,24 +757,26 @@ def plot_annotated_stress(
 ) -> Any:
     """Stress contour plot with critical-point annotations.
 
-    If *annotations* is ``None``, critical points are detected automatically
-    via :func:`~feaweld.visualization.annotations.find_critical_points`.
+    If *annotations* is ``None``, critical points are detected automatically:
+    via [find_critical_points][feaweld.visualization.annotations.find_critical_points] for an
+    [FEMesh][feaweld.core.types.FEMesh], or from the grid's scalar array via
+    `_critical_points_from_grid` when a ready grid is supplied.
 
     Parameters
     ----------
-    mesh:
-        Finite-element mesh.
-    stress:
-        Nodal stress field.
-    annotations:
+    mesh : feaweld.core.types.FEMesh or pyvista.DataSet
+        Finite-element mesh, or a ready PyVista grid.
+    stress : feaweld.core.types.StressField, optional
+        Nodal stress field.  Required when *mesh* is an [FEMesh][feaweld.core.types.FEMesh].
+    annotations : list of CriticalPoint, optional
         Pre-computed list of
-        :class:`~feaweld.visualization.annotations.CriticalPoint`.
+        [CriticalPoint][feaweld.visualization.annotations.CriticalPoint].
         When ``None``, they are generated automatically.
-    component:
+    component : str
         Stress component to display.
-    show:
+    show : bool
         Open an interactive window.
-    **kwargs:
+    **kwargs
         Forwarded to ``plotter.add_mesh()``.
 
     Returns
@@ -750,16 +784,15 @@ def plot_annotated_stress(
     pyvista.Plotter
     """
     import pyvista as pv
-    from feaweld.visualization.stress_plots import stress_field_to_pyvista
     from feaweld.visualization.annotations import (
         annotate_3d,
         find_critical_points,
     )
 
-    scalar_key = _resolve_component(component)
+    scalar_key = resolve_component(component)
     n_max = kwargs.pop("n_max", 5)
 
-    grid = stress_field_to_pyvista(mesh, stress)
+    grid = resolve_grid(mesh, stress)
 
     plotter = pv.Plotter(off_screen=not show)
     configure_plotter(plotter)
@@ -775,11 +808,10 @@ def plot_annotated_stress(
 
     # Auto-detect critical points when none are supplied.
     if annotations is None:
-        annotations = find_critical_points(
-            mesh,
-            stress,
-            n_max=n_max,
-        )
+        if hasattr(mesh, "point_data"):
+            annotations = _critical_points_from_grid(grid, scalar_key, n_max)
+        else:
+            annotations = find_critical_points(mesh, stress, n_max=n_max)
 
     annotate_3d(plotter, annotations)
 

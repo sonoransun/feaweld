@@ -43,7 +43,7 @@ material:
   haz: A36
   temperature: 20.0
 geometry:
-  joint_type: FILLET_T
+  joint_type: fillet_t
   base_width: 200.0
   base_thickness: 20.0
   web_height: 100.0
@@ -55,12 +55,12 @@ mesh:
   weld_toe_size: 0.2
   element_order: 2
 solver:
-  solver_type: LINEAR_ELASTIC
+  solver_type: linear_elastic
   backend: auto
 load:
   axial_force: 50000.0
 postprocess:
-  stress_methods: [HOTSPOT_LINEAR, STRUCTURAL_DONG, BLODGETT]
+  stress_methods: [hotspot_linear, structural_dong, blodgett]
   sn_curve: IIW_FAT90
   fatigue_assessment: true
 output_dir: results/fillet_t_joint
@@ -68,6 +68,12 @@ output_dir: results/fillet_t_joint
 
 ```bash
 feaweld run case.yaml
+```
+
+A ready-made copy of this case ships with the package as `examples/fillet_t_joint.yaml`, so you can run it directly without writing `case.yaml` first:
+
+```bash
+feaweld run examples/fillet_t_joint.yaml
 ```
 
 ## 4. Hand calculation (no FEA)
@@ -82,13 +88,18 @@ Outputs weld-group section properties, component stresses, and LRFD/ASD capaciti
 
 ## 5. Parametric study
 
-Define sweeps in YAML and run them in parallel:
+Define sweeps in YAML and run them in parallel. The `base_case` is a full inline
+analysis case (a path to a separate case file is **not** accepted), and each
+`parameters` entry is a dot-path into that case:
 
 ```yaml
 # study.yaml
 name: weld_leg_sweep
 mode: grid
-base_case: case.yaml
+base_case:
+  geometry: {joint_type: fillet_t, weld_leg_size: 8.0}   # weld_leg_size overridden by the sweep
+  load: {axial_force: 50000.0}
+  postprocess: {stress_methods: [hotspot_linear, structural_dong], sn_curve: IIW_FAT90}
 parameters:
   - name: geometry.weld_leg_size
     values: [6.0, 8.0, 10.0, 12.0]
@@ -98,7 +109,9 @@ parameters:
 feaweld study run study.yaml -j 4
 ```
 
-A comparison report is emitted with delta tables and sensitivity plots.
+A ready-made copy ships as `examples/leg_sweep_study.yaml` — run it directly with
+`feaweld study run examples/leg_sweep_study.yaml -j 4`. A comparison report is
+emitted with delta tables and sensitivity plots.
 
 ## Next steps
 

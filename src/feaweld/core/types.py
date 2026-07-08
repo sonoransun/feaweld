@@ -10,6 +10,25 @@ import numpy as np
 from numpy.typing import NDArray
 
 
+class CaseInsensitiveStrEnum(str, Enum):
+    """String enum that also accepts case-insensitive values and member names.
+
+    YAML case files may spell enum entries in any case (``FILLET_T``,
+    ``fillet_t``, ``Fillet_T``) or by member name where it differs from
+    the value (``SED`` for ``strain_energy_density``); lookup falls back
+    to a lowercase comparison against both.
+    """
+
+    @classmethod
+    def _missing_(cls, value: object):
+        if isinstance(value, str):
+            lowered = value.lower()
+            for member in cls:
+                if member.value == lowered or member.name.lower() == lowered:
+                    return member
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Geometry primitives
 # ---------------------------------------------------------------------------
@@ -53,7 +72,7 @@ class WeldSegment:
         return self.leg_size  # for groove welds, leg_size = throat
 
 
-class WeldType(str, Enum):
+class WeldType(CaseInsensitiveStrEnum):
     FILLET = "fillet"
     GROOVE_FULL = "groove_full_penetration"
     GROOVE_PARTIAL = "groove_partial_penetration"
@@ -61,7 +80,7 @@ class WeldType(str, Enum):
     SLOT = "slot"
 
 
-class JointType(str, Enum):
+class JointType(CaseInsensitiveStrEnum):
     FILLET_T = "fillet_t"
     BUTT = "butt"
     LAP = "lap"
@@ -73,7 +92,7 @@ class JointType(str, Enum):
 # Weld group section properties (for Blodgett hand calculations)
 # ---------------------------------------------------------------------------
 
-class WeldGroupShape(str, Enum):
+class WeldGroupShape(CaseInsensitiveStrEnum):
     """Standard weld group configurations from Blodgett's tables."""
     LINE = "line"           # Single straight line
     PARALLEL = "parallel"   # Two parallel lines
@@ -103,7 +122,7 @@ class WeldGroupProperties:
 # Mesh representation
 # ---------------------------------------------------------------------------
 
-class ElementType(str, Enum):
+class ElementType(CaseInsensitiveStrEnum):
     TRI3 = "tri3"
     TRI6 = "tri6"
     QUAD4 = "quad4"
@@ -227,7 +246,7 @@ class FEAResults:
 # S-N curve specification
 # ---------------------------------------------------------------------------
 
-class SNStandard(str, Enum):
+class SNStandard(CaseInsensitiveStrEnum):
     IIW = "iiw"
     DNV = "dnv"
     ASME = "asme"
@@ -263,7 +282,7 @@ class SNSegment:
 # Load definitions
 # ---------------------------------------------------------------------------
 
-class LoadType(str, Enum):
+class LoadType(CaseInsensitiveStrEnum):
     FORCE = "force"
     PRESSURE = "pressure"
     DISPLACEMENT = "displacement"
@@ -302,7 +321,7 @@ class LoadHistory:
 # Analysis configuration
 # ---------------------------------------------------------------------------
 
-class StressMethod(str, Enum):
+class StressMethod(CaseInsensitiveStrEnum):
     NOMINAL = "nominal"
     HOTSPOT_LINEAR = "hotspot_linear"
     HOTSPOT_QUADRATIC = "hotspot_quadratic"
@@ -313,7 +332,7 @@ class StressMethod(str, Enum):
     BLODGETT = "blodgett"
 
 
-class SolverType(str, Enum):
+class SolverType(CaseInsensitiveStrEnum):
     LINEAR_ELASTIC = "linear_elastic"
     ELASTOPLASTIC = "elastoplastic"
     THERMAL_STEADY = "thermal_steady"

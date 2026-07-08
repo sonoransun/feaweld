@@ -41,13 +41,24 @@ nav:
   - Home: index.md
   - Installation: installation.md
   - Quickstart: quickstart.md
+  - Architecture: architecture.md
   - Tutorials:
       - YAML analysis: tutorials/01_yaml_analysis.md
       - Parametric study: tutorials/02_parametric_study.md
       - Custom post-processing: tutorials/03_custom_postprocessing.md
   - Guides:
+      - Solvers: guides/solvers.md
+      - Loads & boundary conditions: guides/loads_and_bcs.md
+      - PWHT: guides/pwht.md
+      - Probabilistic & reliability: guides/probabilistic.md
+      - ML fatigue prediction: guides/ml.md
+      - Multiscale modeling: guides/multiscale.md
+      - Convergence & submodeling: guides/convergence.md
+      - Digital twin: guides/digital_twin.md
       - Visualization: guides/visualization.md
       - Examples: guides/examples.md
+  - Reference:
+      - CLI: reference/cli.md
   - API reference:
       - core: api/core.md
       - geometry: api/geometry.md
@@ -101,7 +112,11 @@ markdown_extensions:
       pygments_lang_class: true
   - pymdownx.inlinehilite
   - pymdownx.snippets
-  - pymdownx.superfences
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.tabbed:
       alternate_style: true
 

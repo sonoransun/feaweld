@@ -96,6 +96,9 @@ results/
 *_report.html
 *_comparison.html
 
+# MkDocs build output
+site/
+
 # ============================================================================
 # Dependencies / submodules — never commit upstream
 # ============================================================================
@@ -163,6 +166,7 @@ models/
 
 # EXCEPTION: Documentation images (committed, generated via scripts/generate_docs_images.py)
 !docs/images/*.svg
+!docs/images/*.png
 
 # Compressed archives
 *.zip

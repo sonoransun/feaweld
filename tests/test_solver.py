@@ -307,8 +307,18 @@ class TestJ2ReturnMapping:
         np.testing.assert_allclose(stress, expected, rtol=1e-10)
 
     def test_plastic_case_yielding_occurs(self):
-        """Large strain exceeding yield: plastic correction should occur."""
+        """Large strain exceeding yield: stress lands exactly on the yield surface.
+
+        For linear isotropic hardening the corrected von Mises stress must equal
+        ``sigma_y + H * delta_gamma`` exactly (radial-return consistency).  This
+        pins the corrector: the earlier double-subtraction bug returned the
+        stress far inside the surface (vm = vm_trial - 6*mu*delta_gamma) and only
+        survived because the test asserted a one-sided ``vm <= yield + tol``.
+        """
         mat = _make_material(sigma_y=350.0, hardening_modulus=1000.0, E=210000.0)
+        sigma_y = mat.sigma_y(20.0)
+        H = mat.hardening_modulus
+        mu = mat.lame_mu(20.0)
 
         # Large uniaxial strain to push well past yield
         # Yield strain ~ 350 / 210000 ~ 0.00167
@@ -318,28 +328,18 @@ class TestJ2ReturnMapping:
 
         stress, eps_p_new, d_gamma = j2_return_mapping(strain, eps_p_n, mat, 20.0)
 
-        # Plastic increment should be positive
+        # Plastic increment and plastic strain should be non-trivial
         assert d_gamma > 0.0, "Plastic correction should have occurred"
-
-        # Plastic strain should be non-zero
         assert np.linalg.norm(eps_p_new) > 0.0
 
-        # Von Mises stress should be close to (but slightly above due to
-        # hardening) the yield strength
-        s = stress.copy()
-        hydro = (s[0] + s[1] + s[2]) / 3.0
-        s[:3] -= hydro
-        s_sq = s[0]**2 + s[1]**2 + s[2]**2 + 2*(s[3]**2 + s[4]**2 + s[5]**2)
-        vm = np.sqrt(1.5 * s_sq)
+        vm = von_mises(stress)
+        vm_trial = von_mises(mat.elasticity_tensor_3d(20.0) @ strain)
 
-        # Von Mises should be reduced from the trial elastic value
-        # and plastic strain should absorb the difference
-        trial_stress = mat.elasticity_tensor_3d(20.0) @ strain
-        s_trial = trial_stress.copy()
-        hydro_t = (s_trial[0] + s_trial[1] + s_trial[2]) / 3.0
-        s_trial[:3] -= hydro_t
-        s_sq_t = s_trial[0]**2 + s_trial[1]**2 + s_trial[2]**2 + 2*(s_trial[3]**2 + s_trial[4]**2 + s_trial[5]**2)
-        vm_trial = np.sqrt(1.5 * s_sq_t)
+        # Exact consistency: corrected stress sits on the hardened yield surface.
+        np.testing.assert_allclose(vm, sigma_y + H * d_gamma, rtol=1e-6)
+        # Equivalently, vm relaxes from the trial by exactly 3*mu*delta_gamma.
+        np.testing.assert_allclose(vm, vm_trial - 3.0 * mu * d_gamma, rtol=1e-6)
+        # Sanity: the corrected stress is below the elastic trial.
         assert vm < vm_trial, "Returned stress should be less than elastic trial"
 
     def test_plastic_strain_is_deviatoric(self):
@@ -355,6 +355,60 @@ class TestJ2ReturnMapping:
             # Plastic strain trace should be zero (volumetrically incompressible)
             trace = eps_p_new[0] + eps_p_new[1] + eps_p_new[2]
             np.testing.assert_allclose(trace, 0.0, atol=1e-10)
+
+    def test_equiv_plastic_strain_hardens_yield_surface(self):
+        """The accumulated-hardening arg raises the effective yield stress.
+
+        With ``equiv_plastic_strain`` supplied, the yield check is against
+        ``sigma_y + H * equiv_plastic_strain`` and the corrected stress lands on
+        that hardened surface: vm == sigma_y + H * (equiv_plastic_strain + dg).
+        A trial that yields against the virgin surface can therefore stay elastic
+        once enough prior hardening is accumulated.
+        """
+        mat = _make_material(sigma_y=350.0, hardening_modulus=1000.0, E=210000.0)
+        sigma_y = mat.sigma_y(20.0)
+        H = mat.hardening_modulus
+
+        strain = np.array([0.01, 0, 0, 0, 0, 0])
+
+        # Virgin surface: yields with some delta_gamma.
+        _, _, dg0 = j2_return_mapping(strain, np.zeros(6), mat, 20.0)
+        assert dg0 > 0.0
+
+        # Hardened surface: same trial, less plastic flow, and the corrected
+        # stress sits on the hardened surface.
+        p_acc = 0.5 * dg0
+        stress, _, dg1 = j2_return_mapping(
+            strain, np.zeros(6), mat, 20.0, equiv_plastic_strain=p_acc,
+        )
+        assert 0.0 < dg1 < dg0
+        np.testing.assert_allclose(
+            von_mises(stress), sigma_y + H * (p_acc + dg1), rtol=1e-6,
+        )
+
+        # Enough accumulated hardening lifts the effective yield above the trial
+        # von Mises, so the step is elastic (no correction).
+        vm_trial = von_mises(mat.elasticity_tensor_3d(20.0) @ strain)
+        p_big = (vm_trial - sigma_y) / H + 1.0
+        s_el, ep_el, dg_el = j2_return_mapping(
+            strain, np.zeros(6), mat, 20.0, equiv_plastic_strain=p_big,
+        )
+        assert dg_el == 0.0
+        np.testing.assert_allclose(ep_el, np.zeros(6), atol=1e-20)
+        np.testing.assert_allclose(
+            s_el, mat.elasticity_tensor_3d(20.0) @ strain, rtol=1e-10,
+        )
+
+    def test_default_arg_matches_virgin_yield(self):
+        """Omitting equiv_plastic_strain reproduces the original single-shot API."""
+        mat = _make_material(sigma_y=200.0, hardening_modulus=800.0)
+        strain = np.array([0.008, 0, 0, 0, 0, 0])
+
+        a = j2_return_mapping(strain, np.zeros(6), mat, 20.0)
+        b = j2_return_mapping(strain, np.zeros(6), mat, 20.0, equiv_plastic_strain=0.0)
+        np.testing.assert_allclose(a[0], b[0], rtol=1e-12)
+        np.testing.assert_allclose(a[1], b[1], rtol=1e-12)
+        assert a[2] == pytest.approx(b[2])
 
 
 # ---------------------------------------------------------------------------
@@ -740,3 +794,134 @@ class TestEdgeCases:
         assert mat.E(20.0) == pytest.approx(200000.0)
         assert mat.E(500.0) == pytest.approx(200000.0)
         assert mat.nu(100.0) == pytest.approx(0.3)
+
+
+# ---------------------------------------------------------------------------
+# Tests: solve_elastoplastic (elastic predictor + J2 post-correction)
+# ---------------------------------------------------------------------------
+
+class TestSolveElastoplastic:
+    """Exercise the elastoplastic solve using the canned FakeBackend."""
+
+    def test_stress_capped_at_hardened_yield(self, fake_backend):
+        """Above-yield points land exactly on the hardened yield surface.
+
+        Backward-Euler radial return with linear hardening is exact for the
+        proportional ramp used here, so a yielded point's von Mises stress must
+        equal ``sigma_y + H * delta_gamma`` where ``delta_gamma`` is the
+        single-shot consistency parameter ``(vm_trial - sigma_y) / (3*mu + H)``.
+        The prior test only checked a one-sided ``vm <= bound`` and so passed
+        even with the double-subtraction bug (which lands stress far inside).
+        """
+        from feaweld.solver.mechanical import solve_elastoplastic
+
+        # FakeBackend produces a gradient up to ~200 MPa; a 100 MPa yield
+        # ensures the high-stress nodes go plastic.
+        mat = _make_material(sigma_y=100.0, hardening_modulus=1000.0, E=200000.0)
+        mesh = _make_simple_mesh()
+
+        res = solve_elastoplastic(fake_backend, mesh, mat, None, temperature=20.0)
+        meta = res.metadata["plasticity"]
+        assert meta["n_yielded_points"] > 0
+
+        mu = mat.lame_mu(20.0)
+        sigma_y = mat.sigma_y(20.0)
+        H = mat.hardening_modulus
+
+        trial_vm = von_mises(fake_backend.canned_stress(mesh))
+        yielded = trial_vm > sigma_y
+        assert np.any(yielded)
+
+        dgamma = (trial_vm[yielded] - sigma_y) / (3.0 * mu + H)
+        expected_vm = sigma_y + H * dgamma
+        np.testing.assert_allclose(
+            res.stress.von_mises[yielded], expected_vm, rtol=1e-6,
+        )
+        # Points below yield are left exactly as the elastic solve produced them.
+        np.testing.assert_allclose(
+            res.stress.von_mises[~yielded], trial_vm[~yielded], rtol=1e-6,
+        )
+
+    def test_result_independent_of_n_increments(self, fake_backend_cls):
+        """Proportional loading: final state must not depend on n_increments.
+
+        The incremental ramp now hardens the yield surface with the accumulated
+        equivalent plastic strain, so a single load step and a ten-step ramp
+        must agree to machine precision for a radial (proportional) load path.
+        Before the fix each increment re-yielded from the virgin surface and the
+        answer drifted with the step count.
+        """
+        from feaweld.solver.mechanical import solve_elastoplastic
+
+        # Above-yield state (the ~200 MPa node yields against a 100 MPa surface).
+        mat = _make_material(sigma_y=100.0, hardening_modulus=1000.0, E=200000.0)
+        mesh = _make_simple_mesh()
+
+        # max_iterations caps n_increments = min(max_iterations, 10).
+        res_1 = solve_elastoplastic(
+            fake_backend_cls(), mesh, mat, None, temperature=20.0, max_iterations=1,
+        )
+        res_10 = solve_elastoplastic(
+            fake_backend_cls(), mesh, mat, None, temperature=20.0, max_iterations=10,
+        )
+        assert res_1.metadata["plasticity"]["n_increments"] == 1
+        assert res_10.metadata["plasticity"]["n_increments"] == 10
+        assert res_10.metadata["plasticity"]["n_yielded_points"] > 0
+
+        np.testing.assert_allclose(
+            res_1.stress.values, res_10.stress.values, atol=1e-8,
+        )
+
+    def test_below_yield_field_unchanged(self, fake_backend):
+        """A field entirely below yield is returned untouched, nothing yields."""
+        from feaweld.solver.mechanical import solve_elastoplastic
+
+        mat = _make_material(sigma_y=1000.0, hardening_modulus=1000.0)
+        mesh = _make_simple_mesh()
+
+        original = fake_backend.canned_stress(mesh)
+        res = solve_elastoplastic(fake_backend, mesh, mat, None, temperature=20.0)
+
+        assert res.metadata["plasticity"]["n_yielded_points"] == 0
+        np.testing.assert_allclose(res.stress.values, original, atol=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# Tests: simulate_creep_relaxation
+# ---------------------------------------------------------------------------
+
+class TestSimulateCreepRelaxation:
+    def _stressed_results(self, sigma_xx: float = 300.0):
+        mesh = _make_simple_mesh()
+        stress = np.zeros((mesh.n_nodes, 6))
+        stress[:, 0] = sigma_xx
+        return FEAResults(mesh=mesh, stress=StressField(values=stress))
+
+    def test_creep_relaxes_stress(self):
+        from feaweld.solver.creep import simulate_creep_relaxation
+
+        mat = _make_material(creep_A=1e-10, creep_n=3.0, creep_m=0.0)
+        results = self._stressed_results()
+
+        relaxed = simulate_creep_relaxation(
+            results, mat, temperature=550.0, duration_hours=10.0,
+        )
+        vm0 = results.stress.von_mises
+        vm1 = relaxed.stress.von_mises
+        assert np.all(vm1 <= vm0 + 1e-6)
+        assert np.mean(vm1) < np.mean(vm0)
+        assert "creep_relaxation" in relaxed.metadata
+
+    def test_no_creep_params_warns_and_leaves_stress(self):
+        from feaweld.solver.creep import simulate_creep_relaxation
+
+        mat = _make_material(creep_A=0.0)
+        results = self._stressed_results()
+
+        with pytest.warns(RuntimeWarning):
+            relaxed = simulate_creep_relaxation(
+                results, mat, temperature=550.0, duration_hours=10.0,
+            )
+        np.testing.assert_allclose(
+            relaxed.stress.values, results.stress.values, atol=1e-9,
+        )

@@ -62,6 +62,18 @@ class FatiguePredictor:
         self._feature_names: list[str] = []
         self._is_trained: bool = False
 
+    @property
+    def feature_names(self) -> list[str]:
+        """Feature column names in the model's training order.
+
+        Returns
+        -------
+        list[str]
+            A copy of the ordered feature names the model was trained on
+            (empty until :meth:`train` or :meth:`load` has run).
+        """
+        return list(self._feature_names)
+
     # ------------------------------------------------------------------ train
 
     def train(self, features: FatigueFeatures) -> dict[str, float | list[float]]:

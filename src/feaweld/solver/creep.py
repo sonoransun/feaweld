@@ -93,54 +93,41 @@ def norton_bailey_rate(
     return eps_dot
 
 
-def simulate_pwht(
-    results: FEAResults,
+def _relax_stress(
+    stress_values: NDArray,
     material: Material,
-    schedule: PWHTSchedule,
-    dt: float = 60.0,
-) -> FEAResults:
-    """Simulate stress relaxation during post-weld heat treatment.
+    times: NDArray,
+    temperatures: NDArray,
+) -> tuple[NDArray, NDArray]:
+    """Time-step Norton-Bailey creep relaxation of a stress field.
 
-    Time-steps through the PWHT temperature schedule, computing creep
-    strain increments via the Norton-Bailey law and updating the stress
-    field accordingly.
+    Shared integration core for [simulate_pwht][feaweld.solver.creep.simulate_pwht] and
+    [simulate_creep_relaxation][feaweld.solver.creep.simulate_creep_relaxation].
 
     Parameters
     ----------
-    results : FEAResults
-        FEA results containing the initial (as-welded) residual stress field.
-        ``results.stress`` must be populated.
+    stress_values : NDArray
+        Initial stress field ``(n_pts, 6)`` in Voigt notation (MPa).
     material : Material
-        Material with creep parameters (``creep_A``, ``creep_n``, ``creep_m``)
-        and temperature-dependent elastic properties.
-    schedule : PWHTSchedule
-        PWHT temperature-time schedule.
-    dt : float
-        Time step (s) for the creep integration.  Default 60 s.
+        Material with creep parameters (``creep_A``, ``creep_n``, ``creep_m``).
+    times : NDArray
+        Monotonic time values (s).
+    temperatures : NDArray
+        Temperature (C) at each time value.
 
     Returns
     -------
-    FEAResults
-        New results with the relaxed residual stress field and accumulated
-        creep strain.  The ``metadata`` dict contains the key
-        ``"pwht_creep_strain"`` with the final creep strain array.
+    tuple[NDArray, NDArray]
+        ``(relaxed_stress, accumulated_creep_strain)``, both ``(n_pts, 6)``.
     """
-    if results.stress is None:
-        raise ValueError("Input results must have a stress field for PWHT simulation.")
-
-    times, temperatures = schedule.temperature_profile(dt=dt)
-    n_pts = results.stress.values.shape[0]
-
-    # Current stress (mutable copy)
-    stress_current = results.stress.values.copy()
-    # Accumulated creep strain
+    stress_current = stress_values.copy()
     creep_strain = np.zeros_like(stress_current)
+    n_pts = stress_current.shape[0]
 
     A = material.creep_A
     n_exp = material.creep_n
     m_exp = material.creep_m
 
-    # Time-stepping
     for i in range(1, len(times)):
         t = times[i]
         T = temperatures[i]
@@ -181,8 +168,9 @@ def simulate_pwht(
             if not np.all(np.isfinite(stress_current[pt])):
                 import warnings
                 warnings.warn(
-                    f"Non-finite stress at point {pt} during PWHT at time "
-                    f"{t:.1f}s. Values clamped to 0. Consider smaller time steps.",
+                    f"Non-finite stress at point {pt} during creep relaxation "
+                    f"at time {t:.1f}s. Values clamped to 0. Consider smaller "
+                    "time steps.",
                     RuntimeWarning,
                     stacklevel=1,
                 )
@@ -192,6 +180,125 @@ def simulate_pwht(
 
         # Accumulate creep strain
         creep_strain += d_eps_cr
+
+    return stress_current, creep_strain
+
+
+def simulate_creep_relaxation(
+    results: FEAResults,
+    material: Material,
+    temperature: float,
+    duration_hours: float,
+    dt: float = 60.0,
+) -> FEAResults:
+    """Simulate isothermal creep stress relaxation at constant temperature.
+
+    Integrates the Norton-Bailey law over a constant-temperature hold and
+    returns results with the relaxed stress field.  Used by the
+    ``SolverType.CREEP`` workflow path.
+
+    Parameters
+    ----------
+    results : FEAResults
+        Results containing the initial stress field.
+    material : Material
+        Material with creep parameters (``creep_A``, ``creep_n``, ``creep_m``).
+        If ``creep_A`` is zero the relaxation is a no-op and a
+        ``RuntimeWarning`` is emitted.
+    temperature : float
+        Hold temperature (C).
+    duration_hours : float
+        Hold duration (hours).
+    dt : float
+        Integration time step (s).
+
+    Returns
+    -------
+    FEAResults
+        New results with the relaxed stress field; ``metadata`` gains
+        ``"creep_relaxation"`` with the hold parameters and
+        ``"creep_strain"`` with the accumulated creep strain array.
+    """
+    if results.stress is None:
+        raise ValueError("Input results must have a stress field for creep relaxation.")
+
+    if material.creep_A <= 0.0:
+        import warnings
+        warnings.warn(
+            f"Material '{material.name}' has creep_A == 0; creep relaxation "
+            "leaves the stress field unchanged.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+
+    total_time = max(duration_hours, 0.0) * 3600.0
+    n_steps = max(int(total_time / dt) + 1, 2)
+    times = np.linspace(0.0, total_time, n_steps)
+    temps = np.full_like(times, temperature)
+
+    stress_current, creep_strain = _relax_stress(
+        results.stress.values, material, times, temps,
+    )
+
+    return FEAResults(
+        mesh=results.mesh,
+        displacement=results.displacement.copy() if results.displacement is not None else None,
+        stress=StressField(values=stress_current, location=results.stress.location),
+        strain=results.strain.copy() if results.strain is not None else None,
+        temperature=results.temperature.copy() if results.temperature is not None else None,
+        nodal_forces=results.nodal_forces.copy() if results.nodal_forces is not None else None,
+        time_steps=times,
+        metadata={
+            **results.metadata,
+            "creep_strain": creep_strain,
+            "creep_relaxation": {
+                "temperature_C": temperature,
+                "duration_hours": duration_hours,
+                "model": "norton_bailey",
+            },
+        },
+    )
+
+
+def simulate_pwht(
+    results: FEAResults,
+    material: Material,
+    schedule: PWHTSchedule,
+    dt: float = 60.0,
+) -> FEAResults:
+    """Simulate stress relaxation during post-weld heat treatment.
+
+    Time-steps through the PWHT temperature schedule, computing creep
+    strain increments via the Norton-Bailey law and updating the stress
+    field accordingly.
+
+    Parameters
+    ----------
+    results : FEAResults
+        FEA results containing the initial (as-welded) residual stress field.
+        ``results.stress`` must be populated.
+    material : Material
+        Material with creep parameters (``creep_A``, ``creep_n``, ``creep_m``)
+        and temperature-dependent elastic properties.
+    schedule : PWHTSchedule
+        PWHT temperature-time schedule.
+    dt : float
+        Time step (s) for the creep integration.  Default 60 s.
+
+    Returns
+    -------
+    FEAResults
+        New results with the relaxed residual stress field and accumulated
+        creep strain.  The ``metadata`` dict contains the key
+        ``"pwht_creep_strain"`` with the final creep strain array.
+    """
+    if results.stress is None:
+        raise ValueError("Input results must have a stress field for PWHT simulation.")
+
+    times, temperatures = schedule.temperature_profile(dt=dt)
+    stress_current, creep_strain = _relax_stress(
+        results.stress.values, material, times, temperatures,
+    )
 
     # Build output results
     relaxed_stress = StressField(

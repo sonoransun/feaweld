@@ -20,17 +20,17 @@ base_case:
   name: base
   material: {base_metal: A36, weld_metal: E70XX}
   geometry:
-    joint_type: FILLET_T
+    joint_type: fillet_t
     base_width: 200.0
     base_thickness: 20.0
     web_height: 100.0
     web_thickness: 10.0
     weld_leg_size: 8.0   # placeholder, overridden by sweep
   mesh: {global_size: 2.0, weld_toe_size: 0.2, element_order: 2}
-  solver: {solver_type: LINEAR_ELASTIC, backend: auto}
+  solver: {solver_type: linear_elastic, backend: auto}
   load: {axial_force: 50000.0}
   postprocess:
-    stress_methods: [HOTSPOT_LINEAR, STRUCTURAL_DONG]
+    stress_methods: [hotspot_linear, structural_dong]
     sn_curve: IIW_FAT90
 
 parameters:
@@ -55,6 +55,8 @@ Run it:
 ```bash
 feaweld study run leg_sweep.yaml -j 4
 ```
+
+A ready-made copy of this study ships with the package as `examples/leg_sweep_study.yaml`, so you can run `feaweld study run examples/leg_sweep_study.yaml -j 4` without writing the file yourself.
 
 Expected:
 
@@ -101,7 +103,13 @@ The comparison report contains:
 
 - **Metric table** — per-case summary of max von Mises stress, hot-spot stress, predicted life, and any user-defined metric.
 - **Delta vs. baseline** — pick any case as the baseline (`--baseline <case_name>`); the table then shows Δ % relative to it.
-- **Sensitivity plots** — for every swept parameter, a line plot of the response (e.g. fatigue life) against the parameter.
+- **Sensitivity plots** — the report **auto-detects which parameters were swept**
+  (`detect_swept_parameters`) and draws a response-vs-parameter line plot for each,
+  so you don't configure anything: sweep a parameter and its sensitivity figure
+  appears.
+- **Stress-difference figure** — for a two-case comparison the report overlays a
+  stress-difference plot (`plot_stress_difference`) highlighting where the two
+  cases diverge.
 - **Stress envelopes** — min / max stress contours across all cases overlaid.
 
 ## Accessing results programmatically

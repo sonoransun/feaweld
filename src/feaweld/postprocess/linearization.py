@@ -55,13 +55,20 @@ def linearize_through_thickness(
     - Bending: σ_b = (6/t²) ∫₀ᵗ σ·(z - t/2) dz
     - Peak: σ_F = σ_total - σ_linearized
 
-    Args:
-        results: FEA results with stress field
-        start_point: Start of section line (inner surface)
-        end_point: End of section line (outer surface)
-        n_points: Number of sampling points through thickness
+    Parameters
+    ----------
+    results : FEAResults
+        FEA results with stress field
+    start_point : NDArray[np.float64]
+        Start of section line (inner surface)
+    end_point : NDArray[np.float64]
+        End of section line (outer surface)
+    n_points : int
+        Number of sampling points through thickness
 
-    Returns:
+    Returns
+    -------
+    LinearizationResult
         LinearizationResult with all stress components.
     """
     if results.stress is None:
@@ -141,14 +148,22 @@ def linearize_at_weld_toe(
 ) -> LinearizationResult:
     """Convenience function to linearize through thickness at a weld toe.
 
-    Args:
-        results: FEA results
-        weld_toe_node: Node ID at the weld toe (outer surface)
-        plate_thickness: Plate thickness t (mm)
-        surface_normal: Outward normal to the plate surface
-        n_points: Number of sampling points
+    Parameters
+    ----------
+    results : FEAResults
+        FEA results
+    weld_toe_node : int
+        Node ID at the weld toe (outer surface)
+    plate_thickness : float
+        Plate thickness t (mm)
+    surface_normal : NDArray[np.float64]
+        Outward normal to the plate surface
+    n_points : int
+        Number of sampling points
 
-    Returns:
+    Returns
+    -------
+    LinearizationResult
         LinearizationResult
     """
     mesh = results.mesh

@@ -792,6 +792,357 @@ def generate_weld_groups_gallery(out: Path) -> None:
 
 
 # ============================================================================
+# Architecture overview (module map)
+# ============================================================================
+
+def generate_architecture_overview(out: Path) -> None:
+    """Box-and-arrow module map of the feaweld package.
+
+    Three bands: a foundation row (core, data), the linear analysis pipeline
+    (geometry -> mesh -> solver -> postprocess -> fatigue -> pipeline/report),
+    and an extensions row hooking into the pipeline.
+    """
+    plt = _setup_matplotlib()
+    from matplotlib.patches import FancyBboxPatch
+
+    fig, ax = plt.subplots(figsize=(15, 8))
+    ax.set_xlim(0, 16)
+    ax.set_ylim(0, 11)
+    ax.axis("off")
+    fig.patch.set_facecolor(LIGHT_BG)
+
+    def box(x, y, w, h, label, color, *, text_color="white", fontsize=10):
+        patch = FancyBboxPatch(
+            (x - w / 2, y - h / 2), w, h,
+            boxstyle="round,pad=0.12", facecolor=color, edgecolor="white",
+            linewidth=2, alpha=0.92, zorder=2,
+        )
+        ax.add_patch(patch)
+        ax.text(x, y, label, ha="center", va="center", fontsize=fontsize,
+                fontweight="bold", color=text_color, zorder=3)
+
+    # Band labels (left gutter).
+    ax.text(0.15, 9.3, "Extensions", fontsize=11, fontweight="bold",
+            color=GRAY, rotation=90, va="center", ha="center")
+    ax.text(0.15, 5.0, "Analysis Pipeline", fontsize=11, fontweight="bold",
+            color=DARK, rotation=90, va="center", ha="center")
+    ax.text(0.15, 1.4, "Foundation", fontsize=11, fontweight="bold",
+            color=GRAY, rotation=90, va="center", ha="center")
+
+    # --- Middle band: the linear analysis pipeline --------------------------
+    pipeline = [
+        ("geometry", BLUE),
+        ("mesh", "#16a085"),
+        ("solver", "#8e44ad"),
+        ("postprocess", RED),
+        ("fatigue", ORANGE),
+        ("pipeline\n/ report", GREEN),
+    ]
+    xs = np.linspace(2.0, 14.0, len(pipeline))
+    y_mid = 5.0
+    bw, bh = 1.9, 1.2
+    for (label, color), x in zip(pipeline, xs):
+        box(x, y_mid, bw, bh, label, color)
+    for i in range(len(xs) - 1):
+        ax.annotate("", xy=(xs[i + 1] - bw / 2, y_mid),
+                    xytext=(xs[i] + bw / 2, y_mid),
+                    arrowprops=dict(arrowstyle="-|>", color=GRAY, lw=2))
+
+    # --- Bottom band: foundation modules used everywhere --------------------
+    y_found = 1.4
+    box(4.5, y_found, 6.4, 1.1, "core  (types, materials, loads)",
+        DARK, fontsize=11)
+    box(11.5, y_found, 6.4, 1.1, "data  (registry + cache)", DARK, fontsize=11)
+    # A few dashed "builds-on" arrows from foundation up into the pipeline.
+    for x in (xs[0], xs[2], xs[4]):
+        ax.annotate("", xy=(x, y_mid - bh / 2), xytext=(x, y_found + 0.55),
+                    arrowprops=dict(arrowstyle="-|>", color=GRAY, lw=1.2,
+                                    ls="--", alpha=0.6))
+
+    # --- Top band: extensions, each hooking into a pipeline stage -----------
+    y_ext = 9.2
+    ew, eh = 2.2, 0.9
+    extensions = [
+        ("probabilistic", 3),   # -> postprocess
+        ("ml", 4),              # -> fatigue
+        ("multiscale", 2),      # -> solver
+        ("digital_twin", 5),    # -> pipeline/report
+        ("singularity", 3),     # -> postprocess
+        ("visualization", 5),   # -> pipeline/report
+    ]
+    ext_xs = np.linspace(2.0, 14.0, len(extensions))
+    for (label, hook), x in zip(extensions, ext_xs):
+        box(x, y_ext, ew, eh, label, ORANGE if label in
+            ("probabilistic", "ml", "multiscale") else BLUE, fontsize=9)
+        ax.annotate("", xy=(xs[hook], y_mid + bh / 2), xytext=(x, y_ext - eh / 2),
+                    arrowprops=dict(arrowstyle="-|>", color=GRAY, lw=1.0,
+                                    ls=":", alpha=0.65))
+
+    ax.set_title("feaweld Architecture — Module Map", fontsize=16,
+                 fontweight="bold", pad=16)
+    fig.tight_layout()
+    fig.savefig(out / "architecture_overview.svg", format="svg", bbox_inches="tight")
+    plt.close(fig)
+
+
+# ============================================================================
+# Example Gallery — probabilistic, material, and multiscale plot families
+# ============================================================================
+
+def generate_example_sobol(out: Path) -> None:
+    """Sobol sensitivity indices from a real analysis on a toy weld model."""
+    plt = _setup_matplotlib()
+    from feaweld.probabilistic.monte_carlo import RandomVariable
+    from feaweld.probabilistic.sensitivity import sobol_indices
+    from feaweld.visualization.probabilistic_plots import plot_sobol_indices
+
+    variables = [
+        RandomVariable("leg_size", "normal", {"mean": 8.0, "std": 1.2}),
+        RandomVariable("load", "normal", {"mean": 10000.0, "std": 2000.0}),
+        RandomVariable("thickness", "normal", {"mean": 10.0, "std": 1.0}),
+    ]
+
+    def weld_stress(v: dict) -> float:
+        throat = 0.707 * v["leg_size"]
+        area = throat * 100.0  # 100 mm weld length
+        membrane = v["load"] / area
+        return membrane * (1.0 + 0.04 * (12.0 - v["thickness"]))
+
+    indices = sobol_indices(variables, weld_stress, n_base=128, seed=7)
+    fig = plot_sobol_indices(
+        indices, kind="bar", show=False,
+        title="Sobol Sensitivity — Fillet Weld Stress",
+    )
+    fig.savefig(out / "example_sobol.svg", format="svg", bbox_inches="tight")
+    plt.close(fig)
+
+
+def generate_example_mc_distribution(out: Path) -> None:
+    """Monte Carlo safety-factor distribution with empirical CDF."""
+    plt = _setup_matplotlib()
+    from feaweld.visualization.probabilistic_plots import plot_mc_histogram
+
+    rng = np.random.default_rng(2024)
+    # Safety factor: lognormal-ish, centred near 1.6.
+    samples = np.exp(rng.normal(np.log(1.6), 0.22, size=5000))
+    fig = plot_mc_histogram(
+        samples, show_cdf=True, xlabel="Safety factor",
+        title="Monte Carlo — Fatigue Safety Factor", show=False,
+    )
+    fig.savefig(out / "example_mc_distribution.svg", format="svg", bbox_inches="tight")
+    plt.close(fig)
+
+
+def generate_example_reliability(out: Path) -> None:
+    """FORM reliability design point for a resistance-stress toy problem."""
+    plt = _setup_matplotlib()
+    from feaweld.probabilistic.monte_carlo import RandomVariable
+    from feaweld.probabilistic.sensitivity import reliability_index_form
+    from feaweld.visualization.probabilistic_plots import plot_form_reliability
+
+    variables = [
+        RandomVariable("resistance", "normal", {"mean": 350.0, "std": 25.0}),
+        RandomVariable("stress", "normal", {"mean": 200.0, "std": 30.0}),
+    ]
+
+    def limit_state(v: dict) -> float:
+        return v["resistance"] - v["stress"]  # failure when R < S
+
+    form = reliability_index_form(variables, limit_state)
+    fig = plot_form_reliability(
+        form, show=False,
+        title="FORM Reliability — Resistance vs Stress",
+    )
+    fig.savefig(out / "example_reliability.svg", format="svg", bbox_inches="tight")
+    plt.close(fig)
+
+
+def generate_example_cct(out: Path) -> None:
+    """CCT diagram for a bundled structural-steel grade with a cooling marker."""
+    plt = _setup_matplotlib()
+    from feaweld.data.cct import get_cct_diagram, list_cct_grades
+    from feaweld.visualization.material_plots import plot_cct_diagram
+
+    grade = "S355" if "S355" in list_cct_grades() else "A36"
+    diagram = get_cct_diagram(grade)
+    fig = plot_cct_diagram(diagram, grade=grade, cooling_rate=30.0, show=False)
+    fig.savefig(out / "example_cct.svg", format="svg", bbox_inches="tight")
+    plt.close(fig)
+
+
+def generate_example_residual_stress(out: Path) -> None:
+    """Overlay of BS 7910 and API 579 through-thickness residual-stress profiles."""
+    plt = _setup_matplotlib()
+    from feaweld.visualization.material_plots import plot_residual_stress_profile
+
+    fig, ax = plt.subplots(figsize=(8, 6))
+    plot_residual_stress_profile(
+        "BS7910_Level2_butt", yield_strength=355.0, ax=ax, show=False,
+    )
+    plot_residual_stress_profile(
+        "API579_Level2_butt", yield_strength=355.0, ax=ax, show=False,
+        title="Residual Stress Profiles — Butt Weld (BS 7910 vs API 579)",
+    )
+    ax.legend(loc="upper right", fontsize="small")
+    fig.tight_layout()
+    fig.savefig(out / "example_residual_stress.svg", format="svg", bbox_inches="tight")
+    plt.close(fig)
+
+
+def generate_example_creep_relaxation(out: Path) -> None:
+    """Norton-Bailey creep-strain curves at several stress levels."""
+    plt = _setup_matplotlib()
+    from feaweld.visualization.material_plots import plot_creep_curve
+
+    fig = plot_creep_curve(
+        A=1e-20, n=5.0, m=0.0,
+        stress_levels=[100.0, 200.0, 300.0],
+        t_end=2 * 3600.0,  # 2 hours in seconds
+        title="Norton-Bailey Creep — 2 h Hold",
+        show=False,
+    )
+    fig.savefig(out / "example_creep_relaxation.svg", format="svg", bbox_inches="tight")
+    plt.close(fig)
+
+
+def generate_example_multiscale(out: Path) -> None:
+    """Hall-Petch curve with weld-zone grain-size markers."""
+    plt = _setup_matplotlib()
+    from feaweld.multiscale.micro import HALL_PETCH_LOW_CARBON_STEEL
+    from feaweld.visualization.material_plots import plot_hall_petch
+
+    # A single alloy: the zones differ only in grain size, not in the
+    # Hall-Petch constants, so markers sit on one curve.
+    fig = plot_hall_petch(
+        HALL_PETCH_LOW_CARBON_STEEL,
+        grain_size_range=(2.0, 200.0),
+        markers={"FG-HAZ": 15.0, "Base": 30.0, "CG-HAZ": 100.0},
+        title="Hall-Petch — Grain Size Across Weld Zones",
+        show=False,
+    )
+    fig.savefig(out / "example_multiscale.svg", format="svg", bbox_inches="tight")
+    plt.close(fig)
+
+
+# ============================================================================
+# Example Gallery — 3-D PyVista screenshots (synthetic fillet-weld block)
+# ============================================================================
+
+def _build_fillet_mesh():
+    """Synthetic 3-D fillet-weld block (HEX8) with a weld-toe stress hot spot.
+
+    Builds a conforming structured hexahedral mesh over an L-shaped
+    cross-section (base plate + upstanding web joined by a 45-degree fillet)
+    extruded along the weld line, plus a StressField whose sigma_yy peaks at
+    the re-entrant weld toe and a cantilever-style displacement field.
+
+    Returns
+    -------
+    tuple
+        ``(FEMesh, StressField, displacement)`` where *displacement* is an
+        ``(n_nodes, 3)`` array.
+    """
+    from feaweld.core.types import ElementType, FEMesh, StressField
+
+    # Cross-section (x, y) and weld-line (z) extents, mm.
+    W, H, Lz = 30.0, 30.0, 36.0
+    tb, tw, leg = 8.0, 8.0, 8.0  # base thickness, web thickness, fillet leg
+    nx, ny, nz = 16, 16, 13
+    dx, dy, dz = W / (nx - 1), H / (ny - 1), Lz / (nz - 1)
+
+    def inside(xc: float, yc: float) -> bool:
+        if yc <= tb:            # base plate
+            return True
+        if xc <= tw:            # web
+            return True
+        # 45-degree fillet bridging web and base plate
+        return (xc - tw) + (yc - tb) <= leg
+
+    node_id: dict[tuple[int, int, int], int] = {}
+    coords: list[tuple[float, float, float]] = []
+
+    def get_node(i: int, j: int, k: int) -> int:
+        key = (i, j, k)
+        nid = node_id.get(key)
+        if nid is None:
+            nid = len(coords)
+            node_id[key] = nid
+            coords.append((i * dx, j * dy, k * dz))
+        return nid
+
+    elements: list[list[int]] = []
+    for k in range(nz - 1):
+        for j in range(ny - 1):
+            for i in range(nx - 1):
+                if not inside((i + 0.5) * dx, (j + 0.5) * dy):
+                    continue
+                # VTK hexahedron node order: bottom quad then top quad.
+                elements.append([
+                    get_node(i, j, k), get_node(i + 1, j, k),
+                    get_node(i + 1, j + 1, k), get_node(i, j + 1, k),
+                    get_node(i, j, k + 1), get_node(i + 1, j, k + 1),
+                    get_node(i + 1, j + 1, k + 1), get_node(i, j + 1, k + 1),
+                ])
+
+    nodes = np.asarray(coords, dtype=np.float64)
+    elems = np.asarray(elements, dtype=np.int64)
+    mesh = FEMesh(nodes=nodes, elements=elems, element_type=ElementType.HEX8)
+
+    # Stress field: sigma_yy peaks at the re-entrant weld toe (tw, tb).
+    d_toe = np.sqrt((nodes[:, 0] - tw) ** 2 + (nodes[:, 1] - tb) ** 2)
+    nominal, peak, lam = 60.0, 260.0, 6.0
+    syy = nominal + peak * np.exp(-d_toe / lam)
+    values = np.zeros((mesh.n_nodes, 6), dtype=np.float64)
+    values[:, 1] = syy                     # sigma_yy
+    values[:, 0] = 0.15 * syy              # small sigma_xx
+    values[:, 3] = 0.20 * (syy - nominal)  # tau_xy concentrated near the toe
+    stress = StressField(values=values, location="nodes")
+
+    # Cantilever-style displacement: web tip deflects in +x.
+    web_h = np.clip(nodes[:, 1] - tb, 0.0, None)
+    disp = np.zeros((mesh.n_nodes, 3), dtype=np.float64)
+    disp[:, 0] = 0.02 * web_h ** 2 / max(H - tb, 1.0)
+    return mesh, stress, disp
+
+
+def generate_3d_stress_screenshot(out: Path) -> None:
+    """3-D von-Mises stress contour on the synthetic fillet-weld block."""
+    try:
+        import pyvista  # noqa: F401
+    except ImportError:
+        print("(pyvista unavailable, skipping)", end=" ")
+        return
+
+    from feaweld.visualization.export import export_png
+    from feaweld.visualization.stress_plots import plot_stress_field
+
+    mesh, stress, _disp = _build_fillet_mesh()
+    plotter = plot_stress_field(mesh, stress, component="von_mises", show=False)
+    plotter.camera_position = "iso"
+    export_png(plotter, str(out / "example_3d_stress.png"), resolution=(1200, 800))
+    plotter.close()
+
+
+def generate_3d_deformed_screenshot(out: Path) -> None:
+    """3-D deformed shape of the fillet-weld block, coloured by von-Mises stress."""
+    try:
+        import pyvista  # noqa: F401
+    except ImportError:
+        print("(pyvista unavailable, skipping)", end=" ")
+        return
+
+    from feaweld.visualization.export import export_png
+    from feaweld.visualization.stress_plots import plot_deformed
+
+    mesh, stress, disp = _build_fillet_mesh()
+    plotter = plot_deformed(mesh, displacement=disp, scale=12.0, stress=stress,
+                            show=False)
+    plotter.camera_position = "iso"
+    export_png(plotter, str(out / "example_3d_deformed.png"), resolution=(1200, 800))
+    plotter.close()
+
+
+# ============================================================================
 # Main
 # ============================================================================
 
@@ -813,6 +1164,16 @@ def main():
         ("example_sn_curve", generate_example_sn_curve),
         ("example_dong", generate_example_dong),
         ("example_asme_check", generate_example_asme_check),
+        ("architecture_overview", generate_architecture_overview),
+        ("example_sobol", generate_example_sobol),
+        ("example_mc_distribution", generate_example_mc_distribution),
+        ("example_reliability", generate_example_reliability),
+        ("example_cct", generate_example_cct),
+        ("example_residual_stress", generate_example_residual_stress),
+        ("example_creep_relaxation", generate_example_creep_relaxation),
+        ("example_multiscale", generate_example_multiscale),
+        ("example_3d_stress", generate_3d_stress_screenshot),
+        ("example_3d_deformed", generate_3d_deformed_screenshot),
     ]
 
     for name, gen_fn in generators:

@@ -61,14 +61,22 @@ def find_critical_points(
     - Weld toe peak stress (if *weld_line* provided)
     - Locations exceeding *allowable* (if given)
 
-    Args:
-        mesh: Finite-element mesh.
-        stress: Stress field on the mesh.
-        n_max: Maximum number of critical points to return.
-        weld_line: Optional weld line for toe-specific checks.
-        allowable: Optional allowable stress (MPa) for pass/fail marking.
+    Parameters
+    ----------
+    mesh : FEMesh
+        Finite-element mesh.
+    stress : StressField
+        Stress field on the mesh.
+    n_max : int
+        Maximum number of critical points to return.
+    weld_line : WeldLineDefinition | None
+        Optional weld line for toe-specific checks.
+    allowable : float | None
+        Optional allowable stress (MPa) for pass/fail marking.
 
-    Returns:
+    Returns
+    -------
+    list[CriticalPoint]
         List of CriticalPoint sorted by descending severity then value.
     """
     points: list[CriticalPoint] = []
@@ -249,10 +257,11 @@ def annotate_2d(
 def format_engineering_value(value: float, unit: str, precision: int = 1) -> str:
     """Format a value with engineering notation for readability.
 
-    Examples:
-        format_engineering_value(245.3, "MPa") -> "245.3 MPa"
-        format_engineering_value(1.23e6, "cycles") -> "1.23e+06 cycles"
-        format_engineering_value(0.00123, "mm") -> "0.0 mm"
+    Examples
+    --------
+    format_engineering_value(245.3, "MPa") -> "245.3 MPa"
+    format_engineering_value(1.23e6, "cycles") -> "1.23e+06 cycles"
+    format_engineering_value(0.00123, "mm") -> "0.0 mm"
     """
     if abs(value) >= 1e5 or (abs(value) < 0.01 and value != 0):
         return f"{value:.{precision}e} {unit}"

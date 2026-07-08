@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
+from collections.abc import Coroutine
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable
@@ -17,6 +19,8 @@ import numpy as np
 from numpy.typing import NDArray
 
 from feaweld.digital_twin.ingest import SensorDataBuffer, SensorReading
+
+logger = logging.getLogger(__name__)
 
 
 class WeldLifecycleState(str, Enum):
@@ -63,6 +67,12 @@ class TrendConfig:
 
 class AlertEngine:
     """Threshold and trend-based anomaly detection on sensor data."""
+
+    #: Hard cap on retained samples per channel, applied unconditionally so
+    #: channels that match no trend rule cannot grow ``_history`` without bound.
+    _max_history_per_channel: int = 1000
+    #: Hard cap on retained alerts, applied after every ``check``.
+    _max_alerts: int = 1000
 
     def __init__(self) -> None:
         self.thresholds: list[ThresholdConfig] = []
@@ -126,7 +136,13 @@ class AlertEngine:
         # Trend checks
         if key not in self._history:
             self._history[key] = []
-        self._history[key].append((reading.timestamp, value))
+        history = self._history[key]
+        history.append((reading.timestamp, value))
+        # Bound per-channel history unconditionally. The time-window trim below
+        # only runs for channels that match a trend rule; without this cap a
+        # channel with no matching trend would accumulate one sample forever.
+        if len(history) > self._max_history_per_channel:
+            del history[: len(history) - self._max_history_per_channel]
 
         for tc in self.trends:
             if tc.channel_pattern in reading.channel:
@@ -154,6 +170,11 @@ class AlertEngine:
                             ))
 
         self._alerts.extend(alerts)
+        # Cap retained alerts so a long-running monitor cannot grow this list
+        # without bound. Kept as a list (not a deque) so ``recent_alerts`` can
+        # still slice it.
+        if len(self._alerts) > self._max_alerts:
+            del self._alerts[: len(self._alerts) - self._max_alerts]
         for alert in alerts:
             for cb in self._callbacks:
                 cb(alert)
@@ -239,6 +260,10 @@ class DashboardServer:
         self._clients: set = set()
         self._server = None
         self._model_predictions: dict[str, Any] = {}
+        # Event loop the WebSocket server runs on, captured in ``start()``.
+        # Used to schedule broadcasts safely from foreign threads (e.g. the
+        # paho-mqtt network thread that delivers sensor data).
+        self._loop: asyncio.AbstractEventLoop | None = None
 
     async def start(self) -> None:
         """Start the WebSocket server."""
@@ -246,6 +271,10 @@ class DashboardServer:
             import websockets
         except ImportError:
             raise ImportError("websockets required: pip install feaweld[digital-twin]")
+
+        # Capture the loop we run on so broadcasts scheduled from foreign
+        # threads (e.g. paho-mqtt's network thread) reach the right loop.
+        self._loop = asyncio.get_running_loop()
 
         # Register sensor data callback
         self.buffer.on_data(self._on_sensor_data)
@@ -295,10 +324,46 @@ class DashboardServer:
                 "data": self._model_predictions,
             }))
 
+    def _schedule(self, coro: Coroutine[Any, Any, Any]) -> None:
+        """Schedule a coroutine on the server's event loop, thread-safely.
+
+        Broadcast-producing callbacks reach this from three kinds of caller:
+        the event-loop thread itself (the demo feed, on-loop state
+        transitions), a foreign thread with no running loop (paho-mqtt's
+        network thread delivering sensor data), and application code that may
+        run before the server has started. This routes each case to the
+        correct asyncio primitive so a broadcast is never silently dropped by
+        a stray ``RuntimeError``.
+
+        Parameters
+        ----------
+        coro : Coroutine
+            The coroutine to run. If the server has not been started (no loop
+            captured yet) it is closed and dropped with a debug-level note.
+        """
+        loop = self._loop
+        if loop is None:
+            logger.debug("Dropping broadcast: server not started (no event loop).")
+            coro.close()
+            return
+
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+
+        if running is loop:
+            # On the loop thread already: fast path, unchanged behaviour.
+            loop.create_task(coro)
+        else:
+            # Called from a foreign thread (or a different loop): hand the
+            # coroutine to our loop in a thread-safe way.
+            asyncio.run_coroutine_threadsafe(coro, loop)
+
     def update_predictions(self, predictions: dict[str, Any]) -> None:
         """Update model predictions for broadcast."""
         self._model_predictions = predictions
-        asyncio.ensure_future(self._broadcast({
+        self._schedule(self._broadcast({
             "type": "predictions",
             "data": predictions,
             "timestamp": time.time(),
@@ -320,10 +385,7 @@ class DashboardServer:
             "value": float(reading.value) if np.isscalar(reading.value) else reading.value.tolist(),
             "timestamp": reading.timestamp,
         }
-        try:
-            asyncio.get_event_loop().create_task(self._broadcast(msg))
-        except RuntimeError:
-            pass  # No event loop running
+        self._schedule(self._broadcast(msg))
 
     def _on_alert(self, alert: Alert) -> None:
         """Callback when alert is triggered."""
@@ -334,10 +396,7 @@ class DashboardServer:
             "message": alert.message,
             "timestamp": alert.timestamp,
         }
-        try:
-            asyncio.get_event_loop().create_task(self._broadcast(msg))
-        except RuntimeError:
-            pass
+        self._schedule(self._broadcast(msg))
 
     async def _broadcast(self, message: dict) -> None:
         """Broadcast message to all connected clients."""

@@ -15,7 +15,7 @@ from feaweld.pipeline.workflow import (
     load_case,
     save_case,
 )
-from feaweld.pipeline.report import generate_report, REPORT_TEMPLATE
+from feaweld.pipeline.report import generate_report
 
 
 def test_analysis_case_default():
@@ -40,6 +40,23 @@ def test_analysis_case_custom():
     assert case.load.axial_force == 50000.0
 
 
+def test_analysis_case_uppercase_enums():
+    """YAML may spell enums in any case, or by member name (e.g. SED)."""
+    from feaweld.core.types import JointType, SolverType, StressMethod
+
+    case = AnalysisCase(
+        geometry={"joint_type": "FILLET_T"},
+        solver={"solver_type": "Linear_Elastic"},
+        postprocess={"stress_methods": ["HOTSPOT_LINEAR", "SED"]},
+    )
+    assert case.geometry.joint_type is JointType.FILLET_T
+    assert case.solver.solver_type is SolverType.LINEAR_ELASTIC
+    assert case.postprocess.stress_methods[1] is StressMethod.SED
+
+    with pytest.raises(ValueError):
+        JointType("not_a_joint")
+
+
 def test_save_and_load_case(tmp_path):
     """Test round-trip save/load of analysis case."""
     case = AnalysisCase(name="round_trip_test")
@@ -54,10 +71,21 @@ def test_save_and_load_case(tmp_path):
 
 
 def test_report_template_valid():
-    """Test that report template contains required placeholders."""
-    assert "{{ title }}" in REPORT_TEMPLATE
-    assert "{{ content }}" in REPORT_TEMPLATE
-    assert "{{ version }}" in REPORT_TEMPLATE
+    """Test that the Jinja2 report templates load and render."""
+    from feaweld.pipeline.report import _get_env
+
+    env = _get_env()
+    for name in ("base.html.j2", "report.html.j2", "comparison.html.j2"):
+        assert env.get_template(name) is not None
+
+    html = env.get_template("report.html.j2").render(
+        title="smoke", version="0.0", timestamp="now",
+        case=None, mesh=None, fea_rows=[], postprocess_rows=[],
+        fatigue_rows=[], probabilistic_rows=[], figures=[],
+        interactive_figures=[], plotly_cdn=False, warnings=[], errors=[],
+    )
+    assert "feaweld Analysis Report" in html
+    assert "0.0" in html
 
 
 def test_generate_report_creates_file(tmp_path, uniform_stress_results):

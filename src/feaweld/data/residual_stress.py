@@ -41,14 +41,20 @@ def _to_profile(entry: dict) -> ResidualStressProfile:
 def get_residual_profile(name: str) -> ResidualStressProfile:
     """Look up a residual stress profile by name.
 
-    Args:
-        name: Profile name (e.g. ``"BS7910_Level2_butt"``).
+    Parameters
+    ----------
+    name : str
+        Profile name (e.g. ``"BS7910_Level2_butt"``).
 
-    Returns:
+    Returns
+    -------
+    ResidualStressProfile
         ResidualStressProfile dataclass.
 
-    Raises:
-        KeyError: If the profile name is not found.
+    Raises
+    ------
+    KeyError
+        If the profile name is not found.
     """
     data = get_cache().get("residual_stress/profiles")
     for entry in data:
@@ -68,13 +74,19 @@ def evaluate_residual_stress(
     Linearly interpolates the stored profile and scales by the yield
     strength.
 
-    Args:
-        name: Profile name (e.g. ``"BS7910_Level2_butt"``).
-        z_over_t: Normalised through-thickness position(s) in [0, 1].
-            Scalar or array.
-        yield_strength: Material yield strength in MPa.
+    Parameters
+    ----------
+    name : str
+        Profile name (e.g. ``"BS7910_Level2_butt"``).
+    z_over_t : float | np.ndarray
+        Normalised through-thickness position(s) in [0, 1].
+        Scalar or array.
+    yield_strength : float
+        Material yield strength in MPa.
 
-    Returns:
+    Returns
+    -------
+    float | np.ndarray
         Residual stress in MPa (same shape as *z_over_t*).
     """
     profile = get_residual_profile(name)
@@ -97,11 +109,16 @@ def list_residual_profiles(
 ) -> list[ResidualStressProfile]:
     """List available residual stress profiles with optional filtering.
 
-    Args:
-        standard: Filter by standard (e.g. ``"BS7910"``, ``"API579"``).
-        weld_type: Filter by weld type (e.g. ``"butt"``, ``"fillet"``).
+    Parameters
+    ----------
+    standard : str | None
+        Filter by standard (e.g. ``"BS7910"``, ``"API579"``).
+    weld_type : str | None
+        Filter by weld type (e.g. ``"butt"``, ``"fillet"``).
 
-    Returns:
+    Returns
+    -------
+    list[ResidualStressProfile]
         List of matching profiles.
     """
     data = get_cache().get("residual_stress/profiles")

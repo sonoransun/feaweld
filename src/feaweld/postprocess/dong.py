@@ -45,11 +45,16 @@ def dong_structural_stress(
     The method uses balanced nodal forces and moments at the weld toe line
     rather than stress values, making it inherently mesh-independent.
 
-    Args:
-        results: FEA results with nodal forces
-        weld_line: Weld line definition with node IDs and plate thickness
+    Parameters
+    ----------
+    results : FEAResults
+        FEA results with nodal forces
+    weld_line : WeldLineDefinition
+        Weld line definition with node IDs and plate thickness
 
-    Returns:
+    Returns
+    -------
+    DongResult
         DongResult with membrane, bending, and structural stress.
     """
     mesh = results.mesh
@@ -99,12 +104,18 @@ def dong_fatigue_life(
 
     Then: N = (C_d / ΔS_s)^h
 
-    Args:
-        dong_result: Structural stress result from dong_structural_stress
-        plate_thickness: Plate thickness t (mm)
-        stress_range_factor: Multiplier for stress range (default 1.0)
+    Parameters
+    ----------
+    dong_result : DongResult
+        Structural stress result from dong_structural_stress
+    plate_thickness : float
+        Plate thickness t (mm)
+    stress_range_factor : float
+        Multiplier for stress range (default 1.0)
 
-    Returns:
+    Returns
+    -------
+    DongResult
         Updated DongResult with equivalent_stress_range and fatigue_life.
     """
     m_exp = 3.6  # ASME exponent

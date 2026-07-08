@@ -55,14 +55,20 @@ class DataCache:
     def get(self, key: str) -> Any:
         """Get a dataset by key, loading from disk on first access.
 
-        Args:
-            key: Dataset key (e.g., "cct/A36", "scf/parametric_coefficients").
+        Parameters
+        ----------
+        key : str
+            Dataset key (e.g., "cct/A36", "scf/parametric_coefficients").
 
-        Returns:
+        Returns
+        -------
+        Any
             Parsed data (dict, list, or other structure from YAML/JSON).
 
-        Raises:
-            KeyError: If the dataset is not in the registry.
+        Raises
+        ------
+        KeyError
+            If the dataset is not in the registry.
         """
         with self._lock:
             if key in self._entries:

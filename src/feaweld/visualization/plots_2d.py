@@ -1,12 +1,12 @@
 """Matplotlib-based 2D plotting for feaweld FEA weld analysis.
 
-All matplotlib imports are deferred via :func:`_require_matplotlib` so that
+All matplotlib imports are deferred via `_require_matplotlib` so that
 the rest of feaweld remains usable without the optional matplotlib dependency.
 Every public function follows a consistent signature:
 
 * ``show: bool = True`` -- call ``plt.show()`` when *True*.
 * ``ax: Any = None`` -- reuse an existing Axes; create a new Figure when *None*.
-* Returns the :class:`~matplotlib.figure.Figure` that owns the axes.
+* Returns the `Figure` that owns the axes.
 """
 
 from __future__ import annotations
@@ -77,13 +77,13 @@ def plot_through_thickness(
     Parameters
     ----------
     result:
-        A :class:`~feaweld.postprocess.linearization.LinearizationResult`.
+        A [LinearizationResult][feaweld.postprocess.linearization.LinearizationResult].
     title:
         Plot title.
     show:
         Call ``plt.show()`` when *True*.
     ax:
-        An existing :class:`~matplotlib.axes.Axes`; if *None* a new figure
+        An existing `Axes`; if *None* a new figure
         is created.
 
     Returns
@@ -174,7 +174,7 @@ def plot_hotspot_extrapolation(
     Parameters
     ----------
     result:
-        A :class:`~feaweld.postprocess.hotspot.HotSpotResult`.
+        A [HotSpotResult][feaweld.postprocess.hotspot.HotSpotResult].
     title:
         Plot title.
     show:
@@ -273,7 +273,7 @@ def plot_dong_decomposition(
     Parameters
     ----------
     result:
-        A :class:`~feaweld.postprocess.dong.DongResult`.
+        A [DongResult][feaweld.postprocess.dong.DongResult].
     title:
         Plot title.
     show:
@@ -361,7 +361,7 @@ def plot_sn_curve(
     Parameters
     ----------
     curve:
-        A :class:`~feaweld.core.types.SNCurve`.
+        A [SNCurve][feaweld.core.types.SNCurve].
     stress_range:
         If given, compute life and mark on the plot.
     title:
@@ -560,13 +560,13 @@ def plot_weld_group_geometry(
     Parameters
     ----------
     shape:
-        A :class:`~feaweld.core.types.WeldGroupShape` enum value.
+        A [WeldGroupShape][feaweld.core.types.WeldGroupShape] enum value.
     d:
         Primary dimension (mm).
     b:
         Secondary dimension (mm).
     props:
-        Optional :class:`~feaweld.core.types.WeldGroupProperties`.  When
+        Optional [WeldGroupProperties][feaweld.core.types.WeldGroupProperties].  When
         provided a text box with section properties is added.
     show:
         Call ``plt.show()`` when *True*.
@@ -749,7 +749,7 @@ def plot_asme_check(
     Parameters
     ----------
     categorization:
-        A :class:`~feaweld.postprocess.nominal.StressCategorization`.
+        A [StressCategorization][feaweld.postprocess.nominal.StressCategorization].
     S_m:
         Allowable stress intensity (MPa).
     S_y:
@@ -852,9 +852,9 @@ def plot_cross_section_stress(
     Parameters
     ----------
     mesh:
-        A :class:`~feaweld.core.types.FEMesh`.
+        A [FEMesh][feaweld.core.types.FEMesh].
     stress:
-        A :class:`~feaweld.core.types.StressField`.
+        A [StressField][feaweld.core.types.StressField].
     y_level:
         Y-coordinate of the cross-section slice (mm).
     component:
@@ -936,6 +936,135 @@ def plot_cross_section_stress(
 
 
 # ---------------------------------------------------------------------------
+# 9. Spatial stress contour (x-y plane)
+# ---------------------------------------------------------------------------
+
+_STRESS_COMP_INDEX: dict[str, int] = {
+    "xx": 0, "yy": 1, "zz": 2, "xy": 3, "yz": 4, "xz": 5,
+}
+
+
+def _stress_component_values(stress: Any, component: str) -> NDArray[np.float64]:
+    """Return the nodal array for a stress *component* from a StressField."""
+    if component == "von_mises":
+        return stress.von_mises
+    if component == "tresca":
+        return stress.tresca
+    if component in _STRESS_COMP_INDEX:
+        return stress.values[:, _STRESS_COMP_INDEX[component]]
+    raise ValueError(
+        f"Unknown stress component '{component}'. "
+        f"Choose from: von_mises, tresca, {', '.join(_STRESS_COMP_INDEX)}"
+    )
+
+
+def _is_planar_xy(nodes: NDArray[np.float64]) -> bool:
+    """Return *True* when the mesh nodes lie in a single x-y plane."""
+    if nodes.shape[1] < 3:
+        return True
+    span_xy = max(float(np.ptp(nodes[:, 0])), float(np.ptp(nodes[:, 1])), 1.0)
+    return float(np.ptp(nodes[:, 2])) < 1e-9 * span_xy
+
+
+def _contour_triangles(mesh: Any) -> NDArray[np.int64] | None:
+    """Triangle connectivity for a 2-D stress contour, or ``None`` for scatter.
+
+    Triangular elements are used directly. Planar quadrilaterals are split
+    into two triangles each (``[a, b, c]`` and ``[a, c, d]``) so the whole
+    element is painted rather than half. Line elements (fewer than three
+    nodes per element) return ``None`` to signal the scatter fallback.
+
+    Parameters
+    ----------
+    mesh : feaweld.core.types.FEMesh
+        Finite-element mesh whose ``elements`` connectivity is triangulated.
+
+    Returns
+    -------
+    numpy.ndarray or None
+        ``(n_triangles, 3)`` integer connectivity, or ``None`` when the
+        connectivity cannot form triangles.
+    """
+    elements = mesh.elements
+    n_per_elem = elements.shape[1]
+    if n_per_elem < 3:
+        return None
+    if n_per_elem == 4 and _is_planar_xy(mesh.nodes):
+        tris = np.empty((2 * elements.shape[0], 3), dtype=np.int64)
+        tris[0::2] = elements[:, [0, 1, 2]]
+        tris[1::2] = elements[:, [0, 2, 3]]
+        return tris
+    # Triangles (or higher-order triangles) — the three corner nodes.
+    return np.asarray(elements[:, :3], dtype=np.int64)
+
+
+def plot_stress_contour_2d(
+    mesh: Any,
+    stress: Any,
+    component: str = "von_mises",
+    *,
+    title: str | None = None,
+    show: bool = True,
+    ax: Any = None,
+) -> Any:
+    """Filled contour of a stress component on the mesh x-y plane.
+
+    Draws a Matplotlib ``tricontourf`` map for triangular meshes, falling
+    back to a coloured scatter for non-triangular connectivity.
+
+    Parameters
+    ----------
+    mesh : feaweld.core.types.FEMesh
+        Finite-element mesh; nodal ``x``/``y`` coordinates are used.
+    stress : feaweld.core.types.StressField
+        Nodal stress field.
+    component : str
+        Stress component to plot.  One of ``"von_mises"``, ``"tresca"``,
+        ``"xx"``, ``"yy"``, ``"zz"``, ``"xy"``, ``"yz"``, ``"xz"``.
+    title : str, optional
+        Plot title.
+    show : bool
+        Call ``plt.show()`` when *True*.
+    ax : matplotlib.axes.Axes, optional
+        Reuse an existing Axes; a new Figure is created when *None*.
+
+    Returns
+    -------
+    matplotlib.figure.Figure
+    """
+    plt = _require_matplotlib()
+    from matplotlib.tri import Triangulation
+    from feaweld.visualization.theme import get_cmap
+
+    if title is None:
+        title = f"Stress Contour ({component.replace('_', ' ').title()})"
+    fig, ax = _prepare_axes(plt, ax, title)
+
+    vals = _stress_component_values(stress, component)
+    x = mesh.nodes[:, 0]
+    y = mesh.nodes[:, 1]
+    label = f"{component.replace('_', ' ').title()} (MPa)"
+
+    triangles = _contour_triangles(mesh)
+    if triangles is not None:
+        tri = Triangulation(x, y, triangles)
+        tc = ax.tricontourf(tri, vals, levels=20, cmap=get_cmap("stress"))
+        fig.colorbar(tc, ax=ax, label=label)
+    else:
+        sc = ax.scatter(x, y, c=vals, cmap=get_cmap("stress"), s=12)
+        fig.colorbar(sc, ax=ax, label=label)
+
+    ax.set_xlabel("x (mm)")
+    ax.set_ylabel("y (mm)")
+    ax.set_aspect("equal")
+    fig.tight_layout()
+
+    if show:
+        plt.show()
+    return fig
+
+
+# ---------------------------------------------------------------------------
 # Mesh convergence (Richardson / GCI)
 # ---------------------------------------------------------------------------
 
@@ -948,7 +1077,7 @@ def plot_mesh_convergence(
     show: bool = True,
     ax: Any = None,
 ):
-    """Plot mesh refinement convergence from a :class:`ConvergenceResult`.
+    """Plot mesh refinement convergence from a [ConvergenceResult][feaweld.singularity.convergence.ConvergenceResult].
 
     Produces a log-log plot of the quantity of interest versus element
     size across the refinement levels, with the Richardson-extrapolated
@@ -959,7 +1088,7 @@ def plot_mesh_convergence(
     ----------
     result : feaweld.singularity.convergence.ConvergenceResult
         Output of
-        :func:`feaweld.singularity.convergence.convergence_study`.
+        [feaweld.singularity.convergence.convergence_study][].
     quantity_label : str
         Label for the y-axis (e.g. ``"max von Mises stress (MPa)"``).
     title : str, optional

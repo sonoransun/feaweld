@@ -1,0 +1,29 @@
+Gallery image tracking for the W3 docs workstream
+==================================================
+
+This file tracked gallery images referenced by the new docs pages that were
+expected to be produced by a separate generator workstream (task: "W3: Gallery
+image generators"). At the time the docs were written the references were placed
+as commented-out placeholders so that `mkdocs build --strict` would not fail on
+missing files.
+
+STATUS: RESOLVED. As of the final build, every referenced image exists on disk in
+docs/images/, so all placeholders were converted to live Markdown image
+references. There are no pending (commented-out) image references remaining.
+
+Image references added by this workstream (page -> image):
+
+  docs/architecture.md            -> images/architecture_overview.svg
+  docs/guides/probabilistic.md    -> ../images/example_mc_distribution.svg
+  docs/guides/probabilistic.md    -> ../images/example_sobol.svg
+  docs/guides/probabilistic.md    -> ../images/example_reliability.svg
+  docs/guides/multiscale.md       -> ../images/example_cct.svg
+  docs/guides/multiscale.md       -> ../images/example_multiscale.svg
+  docs/guides/pwht.md             -> ../images/example_creep_relaxation.svg
+  docs/guides/visualization.md    -> ../images/example_3d_stress.png
+  docs/guides/visualization.md    -> ../images/example_3d_deformed.png
+
+If any of these images are ever removed from docs/images/, either regenerate them
+or comment the corresponding Markdown image line out with an
+`<!-- pending: ... -->` marker so `mkdocs build --strict` continues to pass, and
+re-list it here.

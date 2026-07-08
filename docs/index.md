@@ -31,15 +31,37 @@ Beyond conventional deterministic methods, feaweld includes:
 
     Run your first analysis from the CLI in under a minute.
 
+-   **[Architecture](architecture.md)**
+
+    The pipeline, design patterns, and module map — with diagrams.
+
 -   **[Tutorials](tutorials/01_yaml_analysis.md)**
 
     Step-by-step walkthroughs of YAML cases, parametric studies, and custom post-processors.
+
+-   **[CLI reference](reference/cli.md)**
+
+    Every command and option, with an example each.
 
 -   **[API reference](api/core.md)**
 
     Auto-generated reference for all 13 sub-packages.
 
 </div>
+
+## Guides
+
+Task-oriented guides for each capability:
+
+- **[Solvers](guides/solvers.md)** — the six solver types, backend auto-detection, and the elastoplastic caveat.
+- **[Loads & boundary conditions](guides/loads_and_bcs.md)** — how each load field becomes a nodal BC.
+- **[PWHT](guides/pwht.md)** — post-weld heat treatment stress relaxation.
+- **[Probabilistic & reliability](guides/probabilistic.md)** — Monte Carlo, Sobol, and FORM.
+- **[ML fatigue prediction](guides/ml.md)** — Random Forest / XGBoost predictors and transfer learning.
+- **[Multiscale modeling](guides/multiscale.md)** — CCT phases, zone properties, and Hall-Petch.
+- **[Convergence & submodeling](guides/convergence.md)** — GCI, the singularity check, and submodels.
+- **[Digital twin](guides/digital_twin.md)** — live dashboard and Bayesian model updating.
+- **[Visualization](guides/visualization.md)** — 2-D / 3-D plots and automatic report figures.
 
 ## Standards coverage
 

@@ -1,6 +1,6 @@
 """Pre-defined distribution models for weld analysis uncertainty.
 
-Provides ready-made :class:`~feaweld.probabilistic.monte_carlo.RandomVariable`
+Provides ready-made [RandomVariable][feaweld.probabilistic.monte_carlo.RandomVariable]
 collections for common sources of scatter in welded joint assessment.
 """
 
@@ -16,15 +16,32 @@ from feaweld.probabilistic.monte_carlo import RandomVariable
 # ---------------------------------------------------------------------------
 
 
-def material_property_distributions(material_name: str) -> list[RandomVariable]:
+def material_property_distributions(
+    material_name: str,
+    yield_nominal: float | None = None,
+    uts_nominal: float | None = None,
+    modulus_nominal: float | None = None,
+) -> list[RandomVariable]:
     """Return standard distributions for material scatter.
+
+    The same relative scatter model (coefficients of variation) is used for
+    all steels; the nominal property values set where each distribution is
+    centred.  Nominal values are taken from *material_name* against a small
+    built-in table of structural steels, but any of them can be overridden to
+    re-centre on the properties of the material actually loaded for the case.
 
     Parameters
     ----------
     material_name : str
-        A material identifier (e.g. ``"S355"``).  Currently the same relative
-        scatter model is used for all steels; *material_name* selects the
-        nominal property values.
+        A material identifier (e.g. ``"S355"``) used to look up nominal
+        property values when the explicit overrides are not given.
+    yield_nominal : float or None
+        Override for the nominal yield strength (MPa).  When ``None`` the
+        table (or the generic fallback) value is used.
+    uts_nominal : float or None
+        Override for the nominal ultimate tensile strength (MPa).
+    modulus_nominal : float or None
+        Override for the nominal elastic modulus (MPa).
 
     Returns
     -------
@@ -47,9 +64,11 @@ def material_property_distributions(material_name: str) -> list[RandomVariable]:
         # Fall back to generic medium-carbon steel
         props = {"yield": 350.0, "uts": 500.0, "E": 210_000.0}
 
-    yield_mean = props["yield"]
-    uts_mean = props["uts"]
-    E_mean = props["E"]
+    # Explicit nominals win; they re-centre the distributions while keeping
+    # each COV (relative scatter) fixed, since the std scales with the mean.
+    yield_mean = yield_nominal if yield_nominal is not None else props["yield"]
+    uts_mean = uts_nominal if uts_nominal is not None else props["uts"]
+    E_mean = modulus_nominal if modulus_nominal is not None else props["E"]
 
     # Lognormal parameters: given COV and physical mean,
     # underlying normal mean mu = ln(phys_mean) - 0.5*sigma^2 and sigma = COV

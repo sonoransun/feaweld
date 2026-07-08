@@ -20,15 +20,21 @@ from numpy.typing import NDArray
 from feaweld.core.types import FEAResults, FEMesh, SNCurve, SNSegment, SNStandard
 
 
-# FAT225 S-N curve for effective notch stress method
+# FAT225 two-slope S-N curve for the effective notch stress method (IIW).
+# Detail class 225 MPa at N = 2e6 cycles.  The slope steepens from m = 3 to
+# m = 5 at the knee (N = 1e7), and the variable-amplitude endurance cutoff is
+# at N = 1e9.  SNCurve.life() scans segments in order and uses the first whose
+# stress_threshold is met, so the m = 3 segment (threshold = knee stress)
+# governs above the knee and the m = 5 segment (threshold = 0) governs below.
+FAT225_KNEE_STRESS = 225.0 * (2e6 / 1e7) ** (1.0 / 3.0)  # ~131.6 MPa at N = 1e7
 FAT225_CURVE = SNCurve(
     name="FAT225",
     standard=SNStandard.IIW,
     segments=[
-        SNSegment(m=3.0, C=225.0**3 * 2e6, stress_threshold=0.0),
-        SNSegment(m=5.0, C=225.0**5 * (2e6)**(5.0/3.0), stress_threshold=0.0),
+        SNSegment(m=3.0, C=225.0**3 * 2e6, stress_threshold=FAT225_KNEE_STRESS),
+        SNSegment(m=5.0, C=FAT225_KNEE_STRESS**5 * 1e7, stress_threshold=0.0),
     ],
-    cutoff_cycles=1e7,
+    cutoff_cycles=1e9,
 )
 
 # Default fictitious radius values per IIW
@@ -60,13 +66,20 @@ def effective_notch_stress(
     toes/roots (see feaweld.geometry.notch). This function extracts the
     maximum stress at the notch root nodes.
 
-    Args:
-        results: FEA results from model with fictitious notch rounding
-        notch_node_ids: Node IDs at the notch root (bottom of rounded area)
-        nominal_stress: Nominal stress for SCF calculation (MPa)
-        fictitious_radius: Radius used in the model (mm)
+    Parameters
+    ----------
+    results : FEAResults
+        FEA results from model with fictitious notch rounding
+    notch_node_ids : NDArray[np.int64]
+        Node IDs at the notch root (bottom of rounded area)
+    nominal_stress : float
+        Nominal stress for SCF calculation (MPa)
+    fictitious_radius : float
+        Radius used in the model (mm)
 
-    Returns:
+    Returns
+    -------
+    NotchStressResult
         NotchStressResult with max stress, SCF, and fatigue life.
     """
     if results.stress is None:
@@ -105,16 +118,24 @@ def notch_stress_scf_parametric(
     Based on parametric studies from literature:
     K_t ≈ 1 + a · (t/ρ)^b · (θ/π)^c
 
-    Args:
-        toe_radius: Weld toe radius ρ (mm)
-        toe_angle: Weld toe flank angle θ (degrees)
-        plate_thickness: Plate thickness t (mm)
-        weld_toe_type: "fillet" or "butt" (used if geometry is None)
-        geometry: Optional SCF database geometry key (e.g., "cruciform",
-            "t_joint"). When provided, coefficients are loaded from the
-            SCF parametric database instead of the inline defaults.
+    Parameters
+    ----------
+    toe_radius : float
+        Weld toe radius ρ (mm)
+    toe_angle : float
+        Weld toe flank angle θ (degrees)
+    plate_thickness : float
+        Plate thickness t (mm)
+    weld_toe_type : str
+        "fillet" or "butt" (used if geometry is None)
+    geometry : str | None
+        Optional SCF database geometry key (e.g., "cruciform",
+        "t_joint"). When provided, coefficients are loaded from the
+        SCF parametric database instead of the inline defaults.
 
-    Returns:
+    Returns
+    -------
+    float
         Estimated stress concentration factor K_t.
     """
     if geometry is not None:
@@ -141,11 +162,16 @@ def assess_notch_fatigue(
 ) -> dict:
     """Full fatigue assessment using notch stress method.
 
-    Args:
-        notch_result: NotchStressResult from effective_notch_stress
-        sn_curve: S-N curve to use (default: FAT225 for notch method)
+    Parameters
+    ----------
+    notch_result : NotchStressResult
+        NotchStressResult from effective_notch_stress
+    sn_curve : SNCurve | None
+        S-N curve to use (default: FAT225 for notch method)
 
-    Returns:
+    Returns
+    -------
+    dict
         Assessment dict with life, utilization ratio, and pass/fail.
     """
     curve = sn_curve or FAT225_CURVE

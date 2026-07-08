@@ -1,6 +1,6 @@
 """Mesh format conversion utilities.
 
-Converts between the internal :class:`~feaweld.core.types.FEMesh`
+Converts between the internal [FEMesh][feaweld.core.types.FEMesh]
 representation and external formats (meshio, VTK, DOLFINx).
 """
 
@@ -37,7 +37,7 @@ _MESHIO_TO_FEMESH: dict[str, ElementType] = {v: k for k, v in _FEMESH_TO_MESHIO.
 # ---------------------------------------------------------------------------
 
 def femesh_to_meshio(mesh: FEMesh) -> meshio.Mesh:
-    """Convert an :class:`FEMesh` to a :class:`meshio.Mesh`.
+    """Convert an [FEMesh][feaweld.core.types.FEMesh] to a `meshio.Mesh`.
 
     Physical groups that map to element indices are stored as
     ``meshio`` *cell_data* under the ``"physical"`` key.  Node sets are
@@ -74,7 +74,7 @@ def femesh_to_meshio(mesh: FEMesh) -> meshio.Mesh:
 # ---------------------------------------------------------------------------
 
 def meshio_to_femesh(mio_mesh: meshio.Mesh) -> FEMesh:
-    """Convert a :class:`meshio.Mesh` to an :class:`FEMesh`.
+    """Convert a `meshio.Mesh` to an [FEMesh][feaweld.core.types.FEMesh].
 
     Only the **first** cell block is imported.  If ``"physical"`` cell
     data is present it is converted back into named physical groups

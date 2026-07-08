@@ -31,6 +31,18 @@ class TransferLearner:
         self._correction_scaler = None
         self._is_tuned = False
 
+    @property
+    def feature_names(self) -> list[str]:
+        """Feature names expected for prediction (from the base model).
+
+        Returns
+        -------
+        list[str]
+            The base model's feature names in training order; a tuned model
+            consumes exactly the same features.
+        """
+        return self.base.feature_names
+
     def fine_tune(
         self,
         new_features: FatigueFeatures,
@@ -65,7 +77,22 @@ class TransferLearner:
         if new_features.target is None:
             raise ValueError("new_features.target is required for fine-tuning.")
 
-        X = new_features.values.copy()
+        # Align incoming feature columns to the base model's feature order so
+        # that both the base-model predictions below and the residual
+        # correction model see columns in the exact order the base model (and
+        # ``predict``) expect, regardless of the order in ``new_features``.
+        base_names = list(self.base._feature_names)
+        new_names = list(new_features.feature_names)
+        missing = [name for name in base_names if name not in new_names]
+        if missing:
+            raise ValueError(
+                "new_features is missing feature(s) required by the base "
+                f"model: {', '.join(missing)}"
+            )
+        column_for = {name: j for j, name in enumerate(new_names)}
+        order = [column_for[name] for name in base_names]
+
+        X = new_features.values[:, order].astype(np.float64, copy=True)
         y = new_features.target.copy()
 
         # Impute NaN with column median

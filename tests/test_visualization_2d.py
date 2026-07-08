@@ -63,6 +63,44 @@ def _make_sn_curve() -> SNCurve:
     )
 
 
+def _make_study_results():
+    """Synthetic StudyResults: three cases that sweep geometry.weld_leg_size.
+
+    All three share the same mesh (so stress-difference works) and carry
+    stress fields scaled per case, plus a fatigue-life entry so metric and
+    sensitivity plots have data to draw.
+    """
+    from feaweld.pipeline.workflow import (
+        AnalysisCase, WorkflowResult, GeometryConfig, PostProcessConfig,
+    )
+    from feaweld.pipeline.study import StudyResults
+
+    mesh = _make_mesh()
+    cases = {}
+    results = {}
+    for name, leg, scale in [("leg6", 6.0, 1.0), ("leg8", 8.0, 1.1), ("leg10", 10.0, 1.25)]:
+        vals = np.zeros((mesh.n_nodes, 6))
+        vals[:, 0] = np.linspace(50, 250, mesh.n_nodes) * scale
+        vals[:, 1] = np.linspace(30, 150, mesh.n_nodes) * scale
+        case = AnalysisCase(
+            name=name,
+            geometry=GeometryConfig(weld_leg_size=leg),
+            postprocess=PostProcessConfig(sn_curve="IIW_FAT90"),
+        )
+        results[name] = WorkflowResult(
+            case=case,
+            mesh=mesh,
+            fea_results=FEAResults(mesh=mesh, stress=StressField(values=vals)),
+            fatigue_results={"hotspot_linear": {"stress_range": 100.0 * scale,
+                                                "life": 2.0e6 / scale}},
+        )
+        cases[name] = case
+    return StudyResults(
+        study_name="leg_sweep", cases=cases, results=results,
+        errors={}, elapsed_seconds=1.5,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Tests: 2D Plots
 # ---------------------------------------------------------------------------
@@ -384,6 +422,15 @@ class TestReportFigures:
         # Dashboard should be generated
         assert "engineering_dashboard" in figures
 
+        # Each entry is now a dict carrying the rendered image, caption, and layout.
+        for key, entry in figures.items():
+            assert set(entry.keys()) == {"b64", "caption", "layout"}, key
+            assert isinstance(entry["b64"], str) and entry["b64"]
+            assert isinstance(entry["caption"], str) and entry["caption"]
+            assert entry["layout"] in {"grid", "full"}
+        # The dashboard is a full-width figure.
+        assert figures["engineering_dashboard"]["layout"] == "full"
+
     def test_generate_report_figures_empty_result(self):
         from feaweld.visualization.report_figures import generate_report_figures
         from feaweld.pipeline.workflow import AnalysisCase, WorkflowResult
@@ -517,3 +564,151 @@ class TestPlotlyFigures:
         assert "plotly" in html_text.lower()
         # CDN script was injected exactly once
         assert html_text.count("cdn.plot.ly") == 1
+
+
+# ---------------------------------------------------------------------------
+# Tests: Study comparison plots
+# ---------------------------------------------------------------------------
+
+class TestComparisonPlots:
+    def test_detect_swept_parameters(self):
+        from feaweld.visualization.comparison import detect_swept_parameters
+        sr = _make_study_results()
+        assert detect_swept_parameters(sr) == ["geometry.weld_leg_size"]
+
+    def test_plot_metric_comparison(self):
+        from feaweld.visualization.comparison import plot_metric_comparison
+        fig = plot_metric_comparison(_make_study_results(), "max_von_mises", show=False)
+        assert isinstance(fig, plt.Figure)
+        plt.close(fig)
+
+    def test_plot_parameter_sensitivity(self):
+        from feaweld.visualization.comparison import plot_parameter_sensitivity
+        fig = plot_parameter_sensitivity(
+            _make_study_results(), "geometry.weld_leg_size", "max_von_mises",
+            show=False,
+        )
+        assert isinstance(fig, plt.Figure)
+        plt.close(fig)
+
+    def test_plot_stress_difference(self):
+        from feaweld.visualization.comparison import plot_stress_difference
+        sr = _make_study_results()
+        mesh = sr.results["leg6"].mesh
+        s_a = sr.results["leg6"].fea_results.stress
+        s_b = sr.results["leg8"].fea_results.stress
+        fig = plot_stress_difference(mesh, s_a, s_b, show=False)
+        assert isinstance(fig, plt.Figure)
+        plt.close(fig)
+
+    def test_plot_stress_difference_shape_mismatch(self):
+        from feaweld.visualization.comparison import plot_stress_difference
+        sr = _make_study_results()
+        mesh = sr.results["leg6"].mesh
+        s_a = sr.results["leg6"].fea_results.stress
+        bad = StressField(values=np.zeros((mesh.n_nodes + 1, 6)))
+        with pytest.raises(ValueError):
+            plot_stress_difference(mesh, s_a, bad, show=False)
+
+    def test_plot_stress_envelope(self):
+        from feaweld.visualization.comparison import plot_stress_envelope
+        fig = plot_stress_envelope(_make_study_results(), show=False)
+        assert isinstance(fig, plt.Figure)
+        plt.close(fig)
+
+    def test_comparison_dashboard(self):
+        from feaweld.visualization.comparison import comparison_dashboard
+        fig = comparison_dashboard(_make_study_results(), baseline="leg6", show=False)
+        assert isinstance(fig, plt.Figure)
+        plt.close(fig)
+
+
+# ---------------------------------------------------------------------------
+# Tests: 2-D stress contour (matplotlib)
+# ---------------------------------------------------------------------------
+
+class TestStressContour2D:
+    def test_tri_mesh_contour(self):
+        from feaweld.visualization.plots_2d import plot_stress_contour_2d
+        mesh = _make_mesh()
+        stress = _make_stress(mesh.n_nodes)
+        fig = plot_stress_contour_2d(mesh, stress, component="von_mises", show=False)
+        assert isinstance(fig, plt.Figure)
+        plt.close(fig)
+
+    def test_non_tri_scatter_fallback(self):
+        from feaweld.visualization.plots_2d import plot_stress_contour_2d
+        # Two-node connectivity forces the scatter fallback path.
+        nodes = np.column_stack([
+            np.linspace(0, 10, 6), np.linspace(0, 5, 6), np.zeros(6),
+        ])
+        mesh = FEMesh(
+            nodes=nodes,
+            elements=np.array([[0, 1], [2, 3], [4, 5]], dtype=np.int64),
+            element_type=ElementType.TRI3,
+        )
+        stress = _make_stress(mesh.n_nodes)
+        fig = plot_stress_contour_2d(mesh, stress, component="xx", show=False)
+        assert isinstance(fig, plt.Figure)
+        plt.close(fig)
+
+    def test_quad_mesh_triangulated(self):
+        from feaweld.visualization.plots_2d import (
+            _contour_triangles, plot_stress_contour_2d,
+        )
+        # 3x3 node grid → four planar quad elements.
+        n = 3
+        xs = np.linspace(0, 10, n)
+        ys = np.linspace(0, 10, n)
+        xx, yy = np.meshgrid(xs, ys)
+        nodes = np.column_stack([xx.ravel(), yy.ravel(), np.zeros(n * n)])
+        quads = []
+        for j in range(n - 1):
+            for i in range(n - 1):
+                n0 = j * n + i
+                quads.append([n0, n0 + 1, n0 + n + 1, n0 + n])
+        quads = np.array(quads, dtype=np.int64)
+        mesh = FEMesh(
+            nodes=nodes, elements=quads, element_type=ElementType.QUAD4,
+        )
+
+        # Each planar quad is split into two triangles, not truncated to one.
+        tris = _contour_triangles(mesh)
+        assert tris.shape == (2 * quads.shape[0], 3)
+
+        stress = _make_stress(mesh.n_nodes)
+        fig = plot_stress_contour_2d(mesh, stress, component="von_mises", show=False)
+        assert isinstance(fig, plt.Figure)
+        plt.close(fig)
+
+
+# ---------------------------------------------------------------------------
+# Tests: lazy public API (import cost stays zero until a plot is used)
+# ---------------------------------------------------------------------------
+
+class TestLazyVizAPI:
+    def test_import_does_not_pull_backends(self):
+        """`import feaweld.visualization` must not import matplotlib/pyvista.
+
+        Run in a fresh subprocess so a matplotlib/pyvista already imported by
+        this test session cannot mask a regression.
+        """
+        import subprocess
+        import sys
+
+        code = (
+            "import sys\n"
+            "import feaweld.visualization as v\n"
+            "assert 'matplotlib' not in sys.modules, 'matplotlib imported eagerly'\n"
+            "assert 'pyvista' not in sys.modules, 'pyvista imported eagerly'\n"
+            "for name in ('plot_sn_curve', 'plot_stress_field', "
+            "'plot_cct_diagram', 'FIGURE_SPECS'):\n"
+            "    assert hasattr(v, name), name\n"
+            "print('ok')\n"
+        )
+        proc = subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True, text=True,
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert "ok" in proc.stdout

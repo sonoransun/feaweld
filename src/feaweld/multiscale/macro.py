@@ -44,11 +44,16 @@ def extract_subregion(
     Identifies nodes within the subregion, separates boundary from interior,
     and packages displacement BCs for the meso model.
 
-    Args:
-        results: Macro-scale FEA results
-        spec: Subregion specification (center and radius)
+    Parameters
+    ----------
+    results : FEAResults
+        Macro-scale FEA results
+    spec : SubregionSpec
+        Subregion specification (center and radius)
 
-    Returns:
+    Returns
+    -------
+    MacroToMesoTransfer
         MacroToMesoTransfer with boundary conditions and interior data.
     """
     mesh = results.mesh
@@ -101,11 +106,16 @@ def interpolate_boundary_conditions(
 
     Uses radial basis function (RBF) interpolation for smooth transfer.
 
-    Args:
-        transfer: MacroToMesoTransfer data
-        target_positions: (n_target, 3) positions of meso boundary nodes
+    Parameters
+    ----------
+    transfer : MacroToMesoTransfer
+        MacroToMesoTransfer data
+    target_positions : NDArray[np.float64]
+        (n_target, 3) positions of meso boundary nodes
 
-    Returns:
+    Returns
+    -------
+    NDArray[np.float64]
         (n_target, 3) interpolated displacements
     """
     if len(transfer.boundary_positions) < 4:
@@ -134,12 +144,18 @@ def check_equilibrium(
 ) -> dict:
     """Verify force equilibrium between macro and meso models.
 
-    Args:
-        transfer: Transfer data from macro model
-        meso_boundary_forces: (n_boundary, 3) forces from meso model at boundary
-        tolerance: Relative force balance tolerance
+    Parameters
+    ----------
+    transfer : MacroToMesoTransfer
+        Transfer data from macro model
+    meso_boundary_forces : NDArray[np.float64]
+        (n_boundary, 3) forces from meso model at boundary
+    tolerance : float
+        Relative force balance tolerance
 
-    Returns:
+    Returns
+    -------
+    dict
         Dict with force sums, imbalance, and pass/fail.
     """
     total_force = np.sum(meso_boundary_forces, axis=0)

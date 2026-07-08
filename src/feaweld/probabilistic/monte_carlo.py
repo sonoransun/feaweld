@@ -68,7 +68,7 @@ class MonteCarloConfig:
 
 @dataclass
 class MonteCarloResult:
-    """Results produced by :class:`MonteCarloEngine.run`."""
+    """Results produced by [MonteCarloEngine.run][feaweld.probabilistic.monte_carlo.MonteCarloEngine.run]."""
 
     samples: NDArray[np.float64]        # (n_samples, n_vars)
     results: NDArray[np.float64]        # (n_samples,) or (n_samples, n_outputs)
@@ -99,7 +99,7 @@ def sample_distribution(
         Distribution name (``"normal"``, ``"lognormal"``, ``"weibull"``,
         ``"uniform"``, ``"gumbel"``).
     params : dict
-        Distribution parameters (see :class:`RandomVariable`).
+        Distribution parameters (see [RandomVariable][feaweld.probabilistic.monte_carlo.RandomVariable]).
     n : int
         Number of samples.
     rng : numpy.random.Generator

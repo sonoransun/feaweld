@@ -179,6 +179,48 @@ class TestDistributions:
         vars_ = material_property_distributions("unknown_steel")
         assert len(vars_) == 4
 
+    def test_material_recentre_on_nominal(self) -> None:
+        """Nominal overrides re-centre distributions, preserving scatter."""
+        vars_ = material_property_distributions(
+            "S355", yield_nominal=250.0, uts_nominal=400.0,
+            modulus_nominal=200_000.0,
+        )
+        by_name = {v.name: v for v in vars_}
+        rng = np.random.default_rng(0)
+        ys = sample_distribution(
+            "lognormal", by_name["yield_strength"].params, 20_000, rng
+        )
+        assert np.mean(ys) == pytest.approx(250.0, rel=0.05)
+        E = sample_distribution(
+            "normal", by_name["elastic_modulus"].params, 20_000, rng
+        )
+        assert np.mean(E) == pytest.approx(200_000.0, rel=0.02)
+
+    def test_material_a36_yield_not_generic_fallback(self) -> None:
+        """A36 (sigma_y = 250 at 20 C) must not collapse to the 350 fallback."""
+        from feaweld.pipeline.workflow import (
+            AnalysisCase,
+            GeometryConfig,
+            MaterialConfig,
+            ProbabilisticConfig,
+            build_probabilistic_model,
+        )
+
+        case = AnalysisCase(
+            material=MaterialConfig(base_metal="A36"),
+            geometry=GeometryConfig(base_width=100.0, base_thickness=10.0),
+            probabilistic=ProbabilisticConfig(
+                enabled=True, include_material_scatter=True,
+                include_geometric_tolerance=False,
+            ),
+        )
+        variables, _ = build_probabilistic_model(case)
+        ys = next(v for v in variables if v.name == "yield_strength")
+        rng = np.random.default_rng(1)
+        samples = sample_distribution(ys.distribution, ys.params, 20_000, rng)
+        assert np.mean(samples) == pytest.approx(250.0, rel=0.05)
+        assert np.mean(samples) < 300.0  # not the 350 MPa generic fallback
+
     def test_geometric_fillet(self) -> None:
         vars_ = geometric_tolerance_distributions("fillet")
         names = {v.name for v in vars_}

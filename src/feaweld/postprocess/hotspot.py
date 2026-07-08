@@ -37,12 +37,18 @@ def hotspot_stress_linear(
     For Type A (surface): σ_hs = 1.67·σ(0.4t) - 0.67·σ(1.0t)
     For Type B (edge): σ_hs = 3·σ(4mm) - 3·σ(8mm) + σ(12mm) [quadratic]
 
-    Args:
-        results: FEA results with stress field
-        weld_line: Definition of the weld toe line
-        hot_spot_type: Type A or Type B
+    Parameters
+    ----------
+    results : FEAResults
+        FEA results with stress field
+    weld_line : WeldLineDefinition
+        Definition of the weld toe line
+    hot_spot_type : HotSpotType
+        Type A or Type B
 
-    Returns:
+    Returns
+    -------
+    list[HotSpotResult]
         List of HotSpotResult, one per weld toe node.
     """
     if results.stress is None:

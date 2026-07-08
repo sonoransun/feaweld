@@ -2,6 +2,14 @@
 
 This tutorial walks through defining a complete fatigue-assessment analysis case in YAML, running it from the CLI, and inspecting the HTML report that comes out.
 
+```mermaid
+flowchart LR
+    yaml["YAML case"] --> mesh["mesh<br/>(Gmsh)"] --> solve["solve<br/>(FEniCSx / CalculiX)"] --> pp["postprocess<br/>(stress methods)"] --> fat["fatigue<br/>(S-N)"] --> rep["HTML report"]
+```
+
+See the [Architecture page](../architecture.md) for the full pipeline with every
+decision branch.
+
 ## Prerequisites
 
 - feaweld installed with visualization extras: `pip install -e ".[viz]"`
@@ -24,7 +32,7 @@ material:
   temperature: 20.0        # °C
 
 geometry:
-  joint_type: FILLET_T     # FILLET_T, BUTT, LAP, CORNER, CRUCIFORM
+  joint_type: fillet_t     # fillet_t, butt, lap, corner, cruciform
   base_width: 200.0        # mm
   base_thickness: 20.0
   web_height: 100.0
@@ -39,7 +47,7 @@ mesh:
   element_type: tri        # tri | quad | tet | hex
 
 solver:
-  solver_type: LINEAR_ELASTIC  # LINEAR_ELASTIC, ELASTOPLASTIC, THERMAL_*, THERMOMECHANICAL, CREEP
+  solver_type: linear_elastic  # linear_elastic, elastoplastic, thermal_steady, thermal_transient, thermomechanical, creep
   backend: auto                # auto | fenics | calculix
 
 load:
@@ -50,14 +58,16 @@ load:
 
 postprocess:
   stress_methods:
-    - HOTSPOT_LINEAR
-    - STRUCTURAL_DONG
-    - BLODGETT
+    - hotspot_linear
+    - structural_dong
+    - blodgett
   sn_curve: IIW_FAT90
   fatigue_assessment: true
 
 output_dir: results/fillet_t_50kn
 ```
+
+A ready-made copy of a similar case ships with the package as `examples/fillet_t_joint.yaml`, so you can run `feaweld run examples/fillet_t_joint.yaml` without writing the file yourself.
 
 ### Field reference
 
@@ -69,6 +79,86 @@ output_dir: results/fillet_t_50kn
 | `solver` | Physics type + backend selection | `feaweld.solver.backend` |
 | `load` | Mechanical + pressure + thermal delta | `feaweld.core.loads` |
 | `postprocess` | Which stress methods to run + S-N curve | `feaweld.postprocess.*` |
+| `thermal` | Welding heat input + PWHT (optional) | `feaweld.solver.thermal` |
+| `probabilistic` | Monte Carlo / Sobol scatter (optional) | `feaweld.probabilistic.*` |
+
+### Full field reference
+
+Every field has a default, so specify only what differs. The complete set:
+
+!!! note "Enum values are case-insensitive"
+    Enum fields (`joint_type`, `solver_type`, `stress_methods`, …) accept any casing
+    and the member name too — `fillet_t`, `FILLET_T`, and `SED` (for
+    `strain_energy_density`) all validate. These docs use the canonical lowercase
+    values, which is what `save_case` writes back.
+
+`solver` — see the [Solvers guide](../guides/solvers.md):
+
+| Field | Default | Meaning |
+|-------|---------|---------|
+| `solver_type` | `linear_elastic` | `linear_elastic`, `elastoplastic`, `thermal_steady`, `thermal_transient`, `thermomechanical`, `creep` |
+| `backend` | `auto` | `auto`, `fenics`, `calculix` |
+| `nonlinear` | `false` | Promotes `linear_elastic` → `elastoplastic` |
+| `max_iterations` | `50` | Elastoplastic increment cap |
+| `tolerance` | `1e-8` | Elastoplastic convergence flag |
+| `time_end` | `100.0` | End time (s) for transient/coupled |
+| `n_time_steps` | `50` | Steps over `[0, time_end]` |
+| `creep_temperature` | `550.0` | Hold temperature (°C) for `creep` |
+| `creep_time_hours` | `10.0` | Hold duration (h) for `creep` |
+
+`load` — see [Loads & boundary conditions](../guides/loads_and_bcs.md):
+
+| Field | Default | Meaning |
+|-------|---------|---------|
+| `axial_force` | `0.0` | N, along +y on the top set |
+| `bending_moment` | `0.0` | N·mm, self-equilibrating couple |
+| `shear_force` | `0.0` | N, along +x on the top set |
+| `pressure` | `0.0` | MPa surface pressure |
+| `temperature_delta` | `0.0` | °C uniform thermoelastic rise |
+
+`postprocess` — see [Custom post-processing](03_custom_postprocessing.md) and [Convergence](../guides/convergence.md):
+
+| Field | Default | Meaning |
+|-------|---------|---------|
+| `stress_methods` | `[hotspot_linear]` | Any of `nominal`, `hotspot_linear`, `hotspot_quadratic`, `structural_dong`, `notch_stress`, `strain_energy_density`, `linearization`, `blodgett` |
+| `sn_curve` | `IIW_FAT90` | S-N curve name (`IIW_FAT*`, `DNV_*`, `ASME_*`) |
+| `fatigue_assessment` | `true` | Run the fatigue stage |
+| `singularity_check` | `true` | Coarse re-solve to flag mesh-driven peaks |
+| `singularity_threshold` | `0.20` | Stress-rise fraction that flags a node |
+| `singularity_coarsening` | `2.0` | Coarse-mesh size factor for the check |
+| `notch_radius` | `1.0` | mm, IIW fictitious radius (effective notch) |
+| `notch_nominal_stress` | `null` | MPa; `null` → computed from load/geometry |
+| `sed_control_radius` | `0.28` | mm, SED control radius R₀ |
+| `sed_w_ref` | `null` | MJ/m³ reference; `null` → skip SED life |
+| `linearization_points` | `20` | Points through the linearization path |
+
+`thermal` — see [Solvers](../guides/solvers.md) and [PWHT](../guides/pwht.md):
+
+| Field | Default | Meaning |
+|-------|---------|---------|
+| `enabled` | `false` | Run a welding thermal pass |
+| `voltage` / `current` | `25.0` / `250.0` | Arc voltage (V) / current (A) |
+| `travel_speed` | `5.0` | mm/s |
+| `efficiency` | `0.8` | Arc efficiency η |
+| `ambient_temperature` | `20.0` | °C sink temperature |
+| `film_coefficient` | `15.0` | W/(m²·K) convection to ambient |
+| `pwht_enabled` | `false` | Run PWHT stress relaxation |
+| `pwht_temperature` | `620.0` | °C hold temperature |
+| `pwht_time_hours` | `2.0` | h hold time |
+| `pwht_heating_rate` / `pwht_cooling_rate` | `55.0` / `55.0` | °C/h ramps |
+
+`probabilistic` — see [Probabilistic & reliability](../guides/probabilistic.md):
+
+| Field | Default | Meaning |
+|-------|---------|---------|
+| `enabled` | `false` | Run the Monte Carlo pass |
+| `n_samples` | `1000` | Sample count |
+| `method` | `lhs` | `lhs` or `random` |
+| `include_material_scatter` | `true` | Material property random variables |
+| `include_geometric_tolerance` | `true` | Geometric tolerance random variables |
+| `seed` | `null` | RNG seed for reproducibility |
+| `sobol` | `false` | Also compute Sobol indices |
+| `sobol_n_base` | `256` | Sobol base sample size |
 
 ## Run it
 
@@ -149,8 +239,8 @@ report_path = generate_report(result)
 ## Common extensions
 
 - **Change the S-N curve** — set `postprocess.sn_curve` to any `IIW_FAT*`, `DNV_*`, or `ASME_*` name. Run `python -c "from feaweld.fatigue.sn_curves import list_curves; print(list_curves())"` for the full list.
-- **Use a different joint** — swap `joint_type` and the matching `geometry` fields (e.g. `BUTT` uses `base_width` + `base_thickness` only; `LAP` adds `web_height` as the overlap).
-- **Add thermal welding simulation** — set `solver.solver_type: THERMOMECHANICAL` and supply a `thermal:` section (see `ThermalConfig` in `workflow.py`).
+- **Use a different joint** — swap `joint_type` and the matching `geometry` fields (e.g. `butt` uses `base_width` + `base_thickness` only; `lap` adds `web_height` as the overlap).
+- **Add thermal welding simulation** — set `solver.solver_type: thermomechanical` and supply a `thermal:` section (see `ThermalConfig` in `workflow.py`).
 
 ## Next
 

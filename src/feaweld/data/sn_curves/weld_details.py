@@ -41,14 +41,20 @@ def _to_weld_detail(entry: dict) -> WeldDetail:
 def get_weld_detail(detail_number: int) -> WeldDetail:
     """Look up a single IIW weld detail by its detail number.
 
-    Args:
-        detail_number: The IIW detail number (e.g. 200, 413).
+    Parameters
+    ----------
+    detail_number : int
+        The IIW detail number (e.g. 200, 413).
 
-    Returns:
+    Returns
+    -------
+    WeldDetail
         WeldDetail dataclass.
 
-    Raises:
-        KeyError: If the detail number is not found.
+    Raises
+    ------
+    KeyError
+        If the detail number is not found.
     """
     data = get_cache().get("sn_curves/iiw_weld_details")
     for entry in data:
@@ -73,14 +79,22 @@ def find_weld_details(
 
     All filters are optional and combined with AND logic.
 
-    Args:
-        joint_type: Filter by joint type (e.g. ``"butt"``, ``"cruciform"``).
-        weld_type: Filter by weld type (e.g. ``"fillet"``, ``"full_pen"``).
-        loading: Filter by loading mode (e.g. ``"direct_stress"``, ``"shear"``).
-        min_fat: Minimum FAT class (inclusive).
-        max_fat: Maximum FAT class (inclusive).
+    Parameters
+    ----------
+    joint_type : str | None
+        Filter by joint type (e.g. ``"butt"``, ``"cruciform"``).
+    weld_type : str | None
+        Filter by weld type (e.g. ``"fillet"``, ``"full_pen"``).
+    loading : str | None
+        Filter by loading mode (e.g. ``"direct_stress"``, ``"shear"``).
+    min_fat : int | None
+        Minimum FAT class (inclusive).
+    max_fat : int | None
+        Maximum FAT class (inclusive).
 
-    Returns:
+    Returns
+    -------
+    list[WeldDetail]
         List of matching WeldDetail entries, ordered by detail number.
     """
     data = get_cache().get("sn_curves/iiw_weld_details")
@@ -114,12 +128,18 @@ def recommend_fat_class(
     joint type, weld type, and loading mode.  This is a conservative
     starting point — the user should verify requirements are met.
 
-    Args:
-        joint_type: Joint type (e.g. ``"butt"``, ``"cruciform"``).
-        weld_type: Weld type (e.g. ``"fillet"``, ``"full_pen"``).
-        loading: Loading mode (default ``"direct_stress"``).
+    Parameters
+    ----------
+    joint_type : str
+        Joint type (e.g. ``"butt"``, ``"cruciform"``).
+    weld_type : str
+        Weld type (e.g. ``"fillet"``, ``"full_pen"``).
+    loading : str
+        Loading mode (default ``"direct_stress"``).
 
-    Returns:
+    Returns
+    -------
+    WeldDetail | None
         Best-matching WeldDetail, or ``None`` if no match is found.
     """
     matches = find_weld_details(

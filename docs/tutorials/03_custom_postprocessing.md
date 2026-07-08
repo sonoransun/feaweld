@@ -135,8 +135,8 @@ Add `MAX_PRINCIPAL` to your `PostProcessConfig.stress_methods`:
 ```yaml
 postprocess:
   stress_methods:
-    - HOTSPOT_LINEAR
-    - MAX_PRINCIPAL
+    - hotspot_linear
+    - max_principal
   sn_curve: IIW_FAT90
 ```
 

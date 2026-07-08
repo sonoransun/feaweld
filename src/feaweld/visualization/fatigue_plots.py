@@ -2,11 +2,11 @@
 
 Covers rainflow cycle histograms, damage-weighted S-N overlays, and the
 damage-evolution animation. Consumes outputs of
-:func:`feaweld.fatigue.rainflow.rainflow_count`,
-:mod:`feaweld.fatigue.sn_curves`, and
-:mod:`feaweld.fatigue.miner`.
+[feaweld.fatigue.rainflow.rainflow_count][],
+[feaweld.fatigue.sn_curves][], and
+[feaweld.fatigue.miner][].
 
-All matplotlib imports are deferred via :func:`_require_matplotlib` so
+All matplotlib imports are deferred via `_require_matplotlib` so
 the rest of feaweld stays importable without the optional ``viz`` extras.
 """
 
@@ -20,7 +20,7 @@ from numpy.typing import NDArray
 
 
 RainflowCycles = list[tuple[float, float, float]]
-"""Output type of :func:`feaweld.fatigue.rainflow.rainflow_count`.
+"""Output type of [feaweld.fatigue.rainflow.rainflow_count][].
 
 Each tuple is ``(stress_range, mean_stress, count)``.
 """
@@ -67,7 +67,7 @@ def plot_rainflow_histogram(
     Parameters
     ----------
     cycles : list of (range, mean, count)
-        Output of :func:`feaweld.fatigue.rainflow.rainflow_count`.
+        Output of [feaweld.fatigue.rainflow.rainflow_count][].
     bins : int
         Number of histogram bins along the range axis (and mean axis for
         the 2-D variants).
@@ -188,7 +188,7 @@ def plot_sn_damage_stacked(
         Rainflow output.
     sn_curve : object
         Object exposing ``sn_curve.life(stress_range: float) -> float``
-        (most :mod:`feaweld.fatigue.sn_curves` classes satisfy this).
+        (most [feaweld.fatigue.sn_curves][] classes satisfy this).
         A callable is also accepted.
     bins : int
         Number of cycle-count bins.

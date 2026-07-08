@@ -1,0 +1,764 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>feaweld digital twin</title>
+<style>
+  :root {
+    --blue: #2980b9;
+    --dark: #1a5276;
+    --red: #e74c3c;
+    --orange: #f39c12;
+    --green: #27ae60;
+    --bg: #0e1621;
+    --panel: #16212e;
+    --panel-2: #1c2a3a;
+    --line: #24374a;
+    --text: #dfe8f0;
+    --muted: #7d94a8;
+    font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+    display: grid;
+    grid-template-rows: auto auto 1fr;
+    grid-template-columns: 1fr;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* ---- header ---- */
+  header {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 10px 16px;
+    background: linear-gradient(180deg, var(--dark), var(--panel));
+    border-bottom: 1px solid var(--line);
+    flex-wrap: wrap;
+  }
+  header h1 {
+    font-size: 17px;
+    font-weight: 600;
+    letter-spacing: 0.4px;
+    margin: 0;
+    white-space: nowrap;
+  }
+  header h1 .accent { color: #7fc4ef; }
+  .spacer { flex: 1 1 auto; }
+  input#wsurl {
+    background: var(--bg);
+    border: 1px solid var(--line);
+    color: var(--text);
+    border-radius: 4px;
+    padding: 6px 8px;
+    width: 230px;
+    max-width: 45vw;
+    font-family: inherit;
+    font-size: 13px;
+  }
+  button {
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 6px 12px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 13px;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  button:hover { background: #26384c; }
+  button.primary { background: var(--blue); border-color: var(--blue); }
+  button.primary:hover { background: #2f8fce; }
+  button.on { background: var(--green); border-color: var(--green); color: #06210f; }
+  .status {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+  .dot {
+    width: 11px; height: 11px;
+    border-radius: 50%;
+    background: #556; /* disconnected */
+    box-shadow: 0 0 0 0 rgba(0,0,0,0);
+    transition: background 0.2s;
+  }
+  .dot.connected { background: var(--green); box-shadow: 0 0 8px rgba(39,174,96,0.7); }
+  .dot.error { background: var(--red); box-shadow: 0 0 8px rgba(231,76,60,0.7); }
+
+  /* ---- state strip ---- */
+  .stateStrip {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 12px 16px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--line);
+    flex-wrap: wrap;
+  }
+  .pill {
+    padding: 6px 14px;
+    border-radius: 18px;
+    border: 1px solid var(--line);
+    background: var(--panel-2);
+    color: var(--muted);
+    font-size: 13px;
+    font-weight: 600;
+    text-transform: capitalize;
+    transition: all 0.2s;
+    white-space: nowrap;
+  }
+  .pill.active {
+    background: var(--blue);
+    border-color: #4aa3dd;
+    color: #eaf4fb;
+    box-shadow: 0 0 12px rgba(41,128,185,0.55);
+  }
+  .arrow { color: var(--muted); font-size: 13px; }
+  .badge {
+    padding: 6px 14px;
+    border-radius: 18px;
+    border: 1px solid var(--line);
+    background: var(--panel-2);
+    color: var(--muted);
+    font-size: 13px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .badge.active { background: var(--red); border-color: #f1786b; color: #fff; }
+  .badge.flash { animation: flash 0.5s ease-in-out 4; }
+  @keyframes flash {
+    0%, 100% { background: var(--panel-2); color: var(--muted); }
+    50% { background: var(--red); color: #fff; box-shadow: 0 0 14px rgba(231,76,60,0.8); }
+  }
+  .transTime { color: var(--muted); font-size: 12px; margin-left: 6px; }
+
+  /* ---- main content ---- */
+  main {
+    display: grid;
+    grid-template-columns: 2fr 1fr;
+    gap: 14px;
+    padding: 14px 16px;
+    align-items: start;
+  }
+  @media (max-width: 900px) {
+    main { grid-template-columns: 1fr; }
+  }
+  .section-title {
+    font-size: 12px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0 0 8px 2px;
+  }
+  .side { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 12px;
+    min-width: 0;
+  }
+
+  /* sensor cards */
+  #sensors {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+    gap: 12px;
+  }
+  #sensors .empty { color: var(--muted); padding: 20px 4px; grid-column: 1 / -1; }
+  .card {
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 10px;
+  }
+  .card-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 8px;
+    margin-bottom: 6px;
+  }
+  .ch-name {
+    font-size: 12px;
+    color: var(--muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .ch-val {
+    font-size: 18px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    color: var(--text);
+    white-space: nowrap;
+  }
+  .chart-wrap { position: relative; height: 72px; }
+  .chart-wrap canvas { width: 100%; height: 72px; display: block; }
+  .ch-max, .ch-min {
+    position: absolute;
+    left: 2px;
+    font-size: 10px;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+    pointer-events: none;
+  }
+  .ch-max { top: 1px; }
+  .ch-min { bottom: 1px; }
+
+  /* predictions */
+  .pred-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+  .tile {
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 10px;
+  }
+  .tile .t-label {
+    font-size: 11px;
+    color: var(--muted);
+    text-transform: capitalize;
+    margin-bottom: 4px;
+  }
+  .tile .t-val {
+    font-size: 18px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+  .pred-empty, .alert-empty { color: var(--muted); padding: 8px 2px; }
+
+  /* alerts */
+  #alerts { max-height: 460px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+  .alert {
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-left: 4px solid var(--muted);
+    border-radius: 4px;
+    padding: 8px 10px;
+  }
+  .alert.info { border-left-color: var(--blue); }
+  .alert.warning { border-left-color: var(--orange); }
+  .alert.critical { border-left-color: var(--red); }
+  .alert .a-msg { font-size: 13px; line-height: 1.35; }
+  .alert .a-meta { font-size: 11px; color: var(--muted); margin-top: 3px; display: flex; gap: 8px; }
+  .alert .a-sev { text-transform: uppercase; font-weight: 700; letter-spacing: 0.5px; }
+  .alert.info .a-sev { color: var(--blue); }
+  .alert.warning .a-sev { color: var(--orange); }
+  .alert.critical .a-sev { color: var(--red); }
+</style>
+</head>
+<body>
+  <header>
+    <h1>feaweld <span class="accent">digital twin</span></h1>
+    <div class="status">
+      <span id="dot" class="dot"></span>
+      <span id="statusText">disconnected</span>
+    </div>
+    <div class="spacer"></div>
+    <input id="wsurl" type="text" spellcheck="false" value="ws://localhost:8765">
+    <button id="connectBtn" class="primary">Connect</button>
+    <button id="demoBtn">Demo</button>
+  </header>
+
+  <div class="stateStrip" id="stateStrip">
+    <span class="pill" data-state="idle">idle</span>
+    <span class="arrow">&rarr;</span>
+    <span class="pill" data-state="welding">welding</span>
+    <span class="arrow">&rarr;</span>
+    <span class="pill" data-state="cooling">cooling</span>
+    <span class="arrow">&rarr;</span>
+    <span class="pill" data-state="pwht">pwht</span>
+    <span class="arrow">&rarr;</span>
+    <span class="pill" data-state="monitoring">monitoring</span>
+    <span class="badge" id="alertBadge">alert</span>
+    <span class="transTime" id="transTime"></span>
+  </div>
+
+  <main>
+    <div class="sensors-col" style="min-width:0;">
+      <div class="section-title">Live sensors</div>
+      <div id="sensors">
+        <div class="empty">Waiting for sensor data&hellip; connect to a server or start Demo mode.</div>
+      </div>
+    </div>
+    <div class="side">
+      <div class="panel">
+        <div class="section-title">Model predictions</div>
+        <div id="predictions"><div class="pred-empty">No predictions received yet.</div></div>
+      </div>
+      <div class="panel">
+        <div class="section-title">Alert feed</div>
+        <div id="alerts"><div class="alert-empty">No alerts.</div></div>
+      </div>
+    </div>
+  </main>
+
+<script>
+"use strict";
+(function () {
+  // ---------- constants ----------
+  var STATES = ["idle", "welding", "cooling", "pwht", "monitoring"];
+  var RING = 300;                 // strip-chart ring buffer length
+  var MAX_ALERTS = 100;
+  var CHART_COLORS = ["#2980b9", "#27ae60", "#f39c12", "#e74c3c", "#8e44ad", "#16a085", "#e67e22"];
+
+  // ---------- dom ----------
+  var dot = document.getElementById("dot");
+  var statusText = document.getElementById("statusText");
+  var wsInput = document.getElementById("wsurl");
+  var connectBtn = document.getElementById("connectBtn");
+  var demoBtn = document.getElementById("demoBtn");
+  var sensorsEl = document.getElementById("sensors");
+  var predictionsEl = document.getElementById("predictions");
+  var alertsEl = document.getElementById("alerts");
+  var stateStrip = document.getElementById("stateStrip");
+  var alertBadge = document.getElementById("alertBadge");
+  var transTimeEl = document.getElementById("transTime");
+  var pills = {};
+  stateStrip.querySelectorAll(".pill").forEach(function (p) { pills[p.dataset.state] = p; });
+
+  // ---------- runtime state ----------
+  var ws = null;
+  var wsEnabled = false;           // user intends to stay connected (drives reconnect)
+  var reconnectTimer = null;
+  var predTimer = null;
+  var stateTimer = null;
+  var demo = null;                 // DemoSource instance when active
+  var charts = new Map();          // "sensor:channel" -> chart entry
+  var alertCount = 0;
+  var currentState = null;
+
+  // ---------- formatting ----------
+  function fmt(v) {
+    if (typeof v !== "number" || !isFinite(v)) { return String(v); }
+    var a = Math.abs(v);
+    if (a >= 1e5 || (a > 0 && a < 1e-3)) { return v.toExponential(2); }
+    if (a >= 100) { return v.toFixed(1); }
+    if (a >= 1) { return v.toFixed(2); }
+    if (a === 0) { return "0"; }
+    return v.toFixed(4);
+  }
+  function pad2(n) { return n < 10 ? "0" + n : "" + n; }
+  function clockTime(ts) {
+    // accept seconds (unix) or ms; treat < 1e12 as seconds
+    var ms = (ts && ts < 1e12) ? ts * 1000 : (ts || Date.now());
+    var d = new Date(ms);
+    return pad2(d.getHours()) + ":" + pad2(d.getMinutes()) + ":" + pad2(d.getSeconds());
+  }
+  function prettyLabel(k) { return String(k).replace(/_/g, " "); }
+
+  // ---------- message dispatch ----------
+  function handleMessage(msg) {
+    if (!msg || typeof msg.type !== "string") { return; }
+    switch (msg.type) {
+      case "state":       updateState(msg.state, msg.timestamp); break;
+      case "sensor":      onSensor(msg); break;
+      case "alert":       onAlert(msg); break;
+      case "predictions": onPredictions(msg.data); break;
+      default: /* ignore unknown */ break;
+    }
+  }
+
+  // ---------- weld state strip ----------
+  function updateState(state, ts) {
+    if (typeof state !== "string") { return; }
+    var changed = state !== currentState;
+    currentState = state;
+
+    STATES.forEach(function (s) {
+      if (pills[s]) { pills[s].classList.toggle("active", s === state); }
+    });
+    alertBadge.classList.toggle("active", state === "alert");
+
+    if (changed) {
+      transTimeEl.textContent = "last transition " + clockTime(ts);
+    }
+  }
+
+  // ---------- sensor strip charts ----------
+  function getChart(key, channel) {
+    var entry = charts.get(key);
+    if (entry) { return entry; }
+
+    var empty = sensorsEl.querySelector(".empty");
+    if (empty) { empty.remove(); }
+
+    var card = document.createElement("div");
+    card.className = "card";
+    var color = CHART_COLORS[charts.size % CHART_COLORS.length];
+    card.innerHTML =
+      '<div class="card-head">' +
+        '<span class="ch-name"></span>' +
+        '<span class="ch-val">&mdash;</span>' +
+      '</div>' +
+      '<div class="chart-wrap">' +
+        '<span class="ch-max"></span>' +
+        '<canvas></canvas>' +
+        '<span class="ch-min"></span>' +
+      '</div>';
+    card.querySelector(".ch-name").textContent = channel;
+    sensorsEl.appendChild(card);
+
+    entry = {
+      key: key,
+      color: color,
+      buffer: [],
+      canvas: card.querySelector("canvas"),
+      ctx: card.querySelector("canvas").getContext("2d"),
+      valueEl: card.querySelector(".ch-val"),
+      minEl: card.querySelector(".ch-min"),
+      maxEl: card.querySelector(".ch-max")
+    };
+    charts.set(key, entry);
+    return entry;
+  }
+
+  function onSensor(msg) {
+    var key = msg.sensor_id + ":" + msg.channel;
+    var v = Array.isArray(msg.value) ? msg.value[0] : msg.value;
+    if (typeof v !== "number" || !isFinite(v)) { return; }
+
+    var entry = getChart(key, msg.channel);
+    var buf = entry.buffer;
+    buf.push(v);
+    if (buf.length > RING) { buf.shift(); }
+    entry.valueEl.textContent = fmt(v);
+    scheduleRedraw(entry);
+  }
+
+  // requestAnimationFrame batching so bursts of readings redraw once per frame
+  var dirty = new Set();
+  var rafPending = false;
+  function scheduleRedraw(entry) {
+    dirty.add(entry);
+    if (!rafPending) { rafPending = true; requestAnimationFrame(flush); }
+  }
+  function flush() {
+    rafPending = false;
+    dirty.forEach(drawChart);
+    dirty.clear();
+  }
+
+  function drawChart(e) {
+    var c = e.canvas, ctx = e.ctx;
+    var dpr = window.devicePixelRatio || 1;
+    var w = c.clientWidth || 1, h = c.clientHeight || 72;
+    var bw = Math.round(w * dpr), bh = Math.round(h * dpr);
+    if (c.width !== bw || c.height !== bh) { c.width = bw; c.height = bh; }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+
+    var buf = e.buffer, n = buf.length;
+    if (n < 1) { return; }
+
+    var mn = Infinity, mx = -Infinity, i;
+    for (i = 0; i < n; i++) { if (buf[i] < mn) { mn = buf[i]; } if (buf[i] > mx) { mx = buf[i]; } }
+    if (mn === mx) { mn -= 1; mx += 1; }
+    var span = mx - mn;
+    var lo = mn - span * 0.12, hi = mx + span * 0.12;
+
+    // baseline grid
+    ctx.strokeStyle = "rgba(255,255,255,0.05)";
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(0, h - 0.5); ctx.lineTo(w, h - 0.5); ctx.stroke();
+
+    // polyline (fills from left, scrolls once full)
+    ctx.beginPath();
+    for (i = 0; i < n; i++) {
+      var x = (i / (RING - 1)) * w;
+      var y = h - ((buf[i] - lo) / (hi - lo)) * h;
+      if (i === 0) { ctx.moveTo(x, y); } else { ctx.lineTo(x, y); }
+    }
+    ctx.strokeStyle = e.color;
+    ctx.lineWidth = 1.6;
+    ctx.lineJoin = "round";
+    ctx.stroke();
+
+    e.maxEl.textContent = fmt(mx);
+    e.minEl.textContent = fmt(mn);
+  }
+
+  function redrawAll() { charts.forEach(scheduleRedraw); }
+  window.addEventListener("resize", redrawAll);
+
+  // ---------- alerts ----------
+  function onAlert(msg) {
+    var empty = alertsEl.querySelector(".alert-empty");
+    if (empty) { empty.remove(); }
+
+    var sev = (msg.severity === "critical" || msg.severity === "warning" || msg.severity === "info")
+      ? msg.severity : "info";
+    var item = document.createElement("div");
+    item.className = "alert " + sev;
+    var meta = document.createElement("div");
+    meta.className = "a-meta";
+    var sevEl = document.createElement("span"); sevEl.className = "a-sev"; sevEl.textContent = sev;
+    var typeEl = document.createElement("span"); typeEl.textContent = msg.alert_type || "";
+    var timeEl = document.createElement("span"); timeEl.textContent = clockTime(msg.timestamp);
+    meta.appendChild(sevEl); meta.appendChild(typeEl); meta.appendChild(timeEl);
+    var m = document.createElement("div");
+    m.className = "a-msg";
+    m.textContent = msg.message || "";
+    item.appendChild(m); item.appendChild(meta);
+
+    alertsEl.insertBefore(item, alertsEl.firstChild);
+    alertCount++;
+    while (alertsEl.children.length > MAX_ALERTS) { alertsEl.removeChild(alertsEl.lastChild); }
+
+    if (sev === "critical") { flashBadge(); }
+  }
+  function flashBadge() {
+    alertBadge.classList.remove("flash");
+    void alertBadge.offsetWidth;        // restart animation
+    alertBadge.classList.add("flash");
+  }
+
+  // ---------- predictions ----------
+  function onPredictions(data) {
+    if (!data || typeof data !== "object") { return; }
+    var keys = Object.keys(data);
+    if (keys.length === 0) {
+      predictionsEl.innerHTML = '<div class="pred-empty">No predictions received yet.</div>';
+      return;
+    }
+    var grid = document.createElement("div");
+    grid.className = "pred-grid";
+    keys.forEach(function (k) {
+      var v = data[k];
+      var tile = document.createElement("div");
+      tile.className = "tile";
+      var label = document.createElement("div");
+      label.className = "t-label";
+      label.textContent = prettyLabel(k);
+      var val = document.createElement("div");
+      val.className = "t-val";
+      val.textContent = (typeof v === "number") ? fmt(v) : String(v);
+      tile.appendChild(label); tile.appendChild(val);
+      grid.appendChild(tile);
+    });
+    predictionsEl.innerHTML = "";
+    predictionsEl.appendChild(grid);
+  }
+
+  // ---------- websocket ----------
+  function setStatus(kind, text) {
+    dot.className = "dot" + (kind ? " " + kind : "");
+    statusText.textContent = text;
+  }
+  function sendJSON(obj) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      try { ws.send(JSON.stringify(obj)); } catch (e) { /* ignore */ }
+    }
+  }
+  function connect() {
+    if (demo) { toggleDemo(false); }     // demo and live are mutually exclusive
+    wsEnabled = true;
+    connectBtn.textContent = "Disconnect";
+    openSocket();
+  }
+  function openSocket() {
+    var url = wsInput.value.trim();
+    if (!url) { return; }
+    setStatus("", "connecting…");
+    try {
+      ws = new WebSocket(url);
+    } catch (e) {
+      setStatus("error", "bad URL");
+      scheduleReconnect();
+      return;
+    }
+    ws.onopen = function () {
+      setStatus("connected", "connected");
+      sendJSON({ type: "get_state" });
+      sendJSON({ type: "get_predictions" });
+      predTimer = setInterval(function () { sendJSON({ type: "get_predictions" }); }, 5000);
+      // stock server only pushes state on connect, so poll it to reflect transitions
+      stateTimer = setInterval(function () { sendJSON({ type: "get_state" }); }, 2000);
+    };
+    ws.onmessage = function (ev) {
+      var msg;
+      try { msg = JSON.parse(ev.data); } catch (e) { return; }
+      handleMessage(msg);
+    };
+    ws.onerror = function () {
+      if (wsEnabled) { setStatus("error", "connection error"); }
+    };
+    ws.onclose = function () {
+      clearTimers();
+      ws = null;
+      if (wsEnabled) {
+        setStatus("error", "reconnecting…");
+        scheduleReconnect();
+      } else {
+        setStatus("", "disconnected");
+      }
+    };
+  }
+  function scheduleReconnect() {
+    if (!wsEnabled) { return; }
+    if (reconnectTimer) { clearTimeout(reconnectTimer); }
+    reconnectTimer = setTimeout(function () { if (wsEnabled) { openSocket(); } }, 2000);
+  }
+  function clearTimers() {
+    if (predTimer) { clearInterval(predTimer); predTimer = null; }
+    if (stateTimer) { clearInterval(stateTimer); stateTimer = null; }
+  }
+  function disconnect() {
+    wsEnabled = false;
+    connectBtn.textContent = "Connect";
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+    clearTimers();
+    if (ws) { try { ws.close(); } catch (e) {} ws = null; }
+    setStatus("", "disconnected");
+  }
+
+  connectBtn.addEventListener("click", function () {
+    if (wsEnabled) { disconnect(); } else { connect(); }
+  });
+
+  // ---------- demo mode (pure client side, no server) ----------
+  function DemoSource(sink) {
+    this.sink = sink;
+    this.t = 0;               // seconds into the cycle
+    this.CYCLE = 44;
+    this.tick = null;
+    this.predTick = null;
+    this.lastPhase = null;
+    this.warned = false;
+    this.critted = false;
+  }
+  DemoSource.prototype.phaseFor = function (t) {
+    if (t < 2) { return "idle"; }
+    if (t < 10) { return "welding"; }
+    if (t < 20) { return "cooling"; }
+    if (t < 30) { return "pwht"; }
+    return "monitoring";
+  };
+  DemoSource.prototype.temperature = function (t) {
+    // realistic weld thermal lifecycle on the process thermocouple
+    if (t < 2) { return 25 + rnd(1.5); }
+    if (t < 10) { var e = t - 2; return 25 + (1500 - 25) * Math.min(1, e / 3) + rnd(12); }
+    if (t < 20) { var c = t - 10; return 620 + (1500 - 620) * Math.exp(-c / 2.5) + rnd(6); }
+    if (t < 30) { return 620 + rnd(9); }                       // PWHT plateau
+    var m = t - 30; return 30 + (620 - 30) * Math.exp(-m / 3.5) + rnd(3);
+  };
+  DemoSource.prototype.emit = function (sink, t) {
+    var phase = this.phaseFor(t);
+    var now = Date.now() / 1000;
+
+    // state transitions
+    if (phase !== this.lastPhase) {
+      sink({ type: "state", state: phase, timestamp: now });
+      this.lastPhase = phase;
+      if (phase === "idle") { this.warned = false; this.critted = false; }
+    }
+
+    // process thermocouple
+    sink({ type: "sensor", sensor_id: "weld_torch", channel: "thermocouple_1",
+           value: this.temperature(t), timestamp: now });
+
+    // arc current / voltage (energised during welding, ~off otherwise)
+    var welding = phase === "welding";
+    sink({ type: "sensor", sensor_id: "weld_torch", channel: "arc_current",
+           value: welding ? 220 + 18 * Math.sin(t * 5) + rnd(9) : Math.abs(rnd(1.5)), timestamp: now });
+    sink({ type: "sensor", sensor_id: "weld_torch", channel: "arc_voltage",
+           value: welding ? 26 + 1.1 * Math.sin(t * 3) + rnd(0.6) : Math.abs(rnd(0.2)), timestamp: now });
+
+    // structural monitoring: strain (microstrain) + mild member temperature
+    var strain = 40 + 90 * bump(t) + 8 * Math.sin(t * 0.8) + rnd(4);
+    sink({ type: "sensor", sensor_id: "hss_node", channel: "strain", value: strain, timestamp: now });
+    sink({ type: "sensor", sensor_id: "hss_node", channel: "temperature", value: 65 + rnd(3), timestamp: now });
+
+    // occasional warning during welding, one critical anomaly during monitoring
+    if (welding && t >= 6 && !this.warned) {
+      this.warned = true;
+      sink({ type: "alert", severity: "warning", alert_type: "threshold",
+             message: "temperature = 952.4 exceeds warning high 900.0", timestamp: now });
+    }
+    if (phase === "monitoring" && t >= 37 && !this.critted) {
+      this.critted = true;
+      sink({ type: "alert", severity: "critical", alert_type: "anomaly",
+             message: "temperature = 1304.7 exceeds critical high 1200.0", timestamp: now });
+    }
+  };
+  DemoSource.prototype.predictions = function (t) {
+    var wear = t / this.CYCLE;
+    this.sink({
+      type: "predictions",
+      data: {
+        fatigue_life_cycles: 2.45e6 * (1 - 0.03 * wear),
+        accumulated_damage: 0.012 + 0.018 * wear,
+        reliability_beta: 3.62 - 0.15 * wear
+      },
+      timestamp: Date.now() / 1000
+    });
+  };
+  DemoSource.prototype.start = function () {
+    var self = this;
+    var t0 = Date.now();
+    this.tick = setInterval(function () {
+      self.t = ((Date.now() - t0) / 1000) % self.CYCLE;
+      self.emit(self.sink, self.t);
+    }, 100);                                   // 10 Hz for smooth charts
+    this.predictions(0);
+    this.predTick = setInterval(function () { self.predictions(self.t); }, 5000);
+  };
+  DemoSource.prototype.stop = function () {
+    if (this.tick) { clearInterval(this.tick); this.tick = null; }
+    if (this.predTick) { clearInterval(this.predTick); this.predTick = null; }
+  };
+
+  function rnd(scale) { return (Math.random() - 0.5) * 2 * scale; }
+  function bump(t) {   // 0..1 hump peaking through cooling/pwht (thermal strain)
+    return Math.max(0, Math.sin(Math.max(0, (t - 8)) / 22 * Math.PI));
+  }
+
+  function toggleDemo(on) {
+    if (on === undefined) { on = !demo; }
+    if (on) {
+      if (wsEnabled) { disconnect(); }
+      if (!demo) {
+        demo = new DemoSource(handleMessage);
+        demo.start();
+      }
+      demoBtn.classList.add("on");
+      demoBtn.textContent = "Demo ●";
+      setStatus("connected", "demo mode");
+    } else {
+      if (demo) { demo.stop(); demo = null; }
+      demoBtn.classList.remove("on");
+      demoBtn.textContent = "Demo";
+      if (!wsEnabled) { setStatus("", "disconnected"); }
+    }
+  }
+  demoBtn.addEventListener("click", function () { toggleDemo(); });
+
+  // ---------- init from query params ----------
+  (function init() {
+    var params = new URLSearchParams(window.location.search);
+    var wsParam = params.get("ws");
+    if (wsParam) { wsInput.value = wsParam; }
+    updateState("idle", Date.now() / 1000);
+    if (params.get("demo") === "1") {
+      toggleDemo(true);
+    } else if (wsParam) {
+      connect();
+    }
+  })();
+})();
+</script>
+</body>
+</html>

@@ -38,6 +38,55 @@ def _prepare_axes(ax, show, figsize=(8, 5)):
 
 
 # ---------------------------------------------------------------------------
+# Swept-parameter detection
+# ---------------------------------------------------------------------------
+
+_SWEEP_CANDIDATE_PATHS = [
+    "load.axial_force", "load.bending_moment", "load.shear_force",
+    "load.pressure", "load.temperature_delta",
+    "mesh.global_size", "mesh.weld_toe_size",
+    "geometry.base_thickness", "geometry.base_width",
+    "geometry.weld_leg_size", "geometry.web_height", "geometry.web_thickness",
+    "material.temperature",
+    "thermal.pwht_temperature", "thermal.pwht_time_hours",
+]
+
+
+def detect_swept_parameters(study_results: Any) -> list[str]:
+    """Detect which case parameters vary across a study.
+
+    Checks a set of common numeric dot-paths (loads, mesh sizes, joint
+    dimensions, temperatures) against every case in the study and
+    returns those whose values differ between cases.
+
+    Parameters
+    ----------
+    study_results : StudyResults
+        Results from ``Study.run()`` (needs the ``cases`` dict).
+
+    Returns
+    -------
+    list[str]
+        Dot-paths of swept parameters (possibly empty).
+    """
+    from feaweld.pipeline.study import _get_nested_attr
+
+    cases = list(study_results.cases.values())
+    if len(cases) < 2:
+        return []
+
+    swept = []
+    for path in _SWEEP_CANDIDATE_PATHS:
+        try:
+            vals = [_get_nested_attr(c, path) for c in cases]
+        except (AttributeError, TypeError):
+            continue
+        if vals and isinstance(vals[0], (int, float)) and len(set(vals)) > 1:
+            swept.append(path)
+    return swept
+
+
+# ---------------------------------------------------------------------------
 # Metric comparison bar chart
 # ---------------------------------------------------------------------------
 
@@ -50,14 +99,22 @@ def plot_metric_comparison(
 ) -> Any:
     """Bar chart comparing one metric across all cases.
 
-    Args:
-        study_results: StudyResults from Study.run()
-        metric: MetricSet field name (e.g., "max_von_mises", "fatigue_life")
-        title: Plot title. Auto-generated if None.
-        show: If True, display interactively.
-        ax: Optional Matplotlib axes.
+    Parameters
+    ----------
+    study_results : Any
+        StudyResults from Study.run()
+    metric : str
+        MetricSet field name (e.g., "max_von_mises", "fatigue_life")
+    title : str | None
+        Plot title. Auto-generated if None.
+    show : bool
+        If True, display interactively.
+    ax : Any
+        Optional Matplotlib axes.
 
-    Returns:
+    Returns
+    -------
+    Any
         matplotlib.figure.Figure
     """
     plt = _require_matplotlib()
@@ -132,14 +189,22 @@ def plot_parameter_sensitivity(
 ) -> Any:
     """Scatter + line plot of a metric vs. a swept parameter.
 
-    Args:
-        study_results: StudyResults from Study.run()
-        param_path: Dot-path of the parameter (e.g., "load.axial_force")
-        metric: MetricSet field name.
-        show: If True, display interactively.
-        ax: Optional Matplotlib axes.
+    Parameters
+    ----------
+    study_results : Any
+        StudyResults from Study.run()
+    param_path : str
+        Dot-path of the parameter (e.g., "load.axial_force")
+    metric : str
+        MetricSet field name.
+    show : bool
+        If True, display interactively.
+    ax : Any
+        Optional Matplotlib axes.
 
-    Returns:
+    Returns
+    -------
+    Any
         matplotlib.figure.Figure
     """
     plt = _require_matplotlib()
@@ -221,17 +286,28 @@ def plot_stress_difference(
 
     Uses a diverging colormap centered at zero.
 
-    Args:
-        mesh: FEMesh
-        stress_a: StressField from case A
-        stress_b: StressField from case B
-        component: Stress component to difference.
-        label_a: Name of case A.
-        label_b: Name of case B.
-        show: If True, display.
-        ax: Optional axes.
+    Parameters
+    ----------
+    mesh : Any
+        FEMesh
+    stress_a : Any
+        StressField from case A
+    stress_b : Any
+        StressField from case B
+    component : str
+        Stress component to difference.
+    label_a : str
+        Name of case A.
+    label_b : str
+        Name of case B.
+    show : bool
+        If True, display.
+    ax : Any
+        Optional axes.
 
-    Returns:
+    Returns
+    -------
+    Any
         matplotlib.figure.Figure
     """
     plt = _require_matplotlib()
@@ -294,13 +370,20 @@ def plot_stress_envelope(
 
     Each case is drawn as a semi-transparent histogram.
 
-    Args:
-        study_results: StudyResults
-        component: Stress component.
-        show: If True, display.
-        ax: Optional axes.
+    Parameters
+    ----------
+    study_results : Any
+        StudyResults
+    component : str
+        Stress component.
+    show : bool
+        If True, display.
+    ax : Any
+        Optional axes.
 
-    Returns:
+    Returns
+    -------
+    Any
         matplotlib.figure.Figure
     """
     plt = _require_matplotlib()
@@ -364,12 +447,18 @@ def comparison_dashboard(
       [3] Stress distribution overlay
       [4] Summary text
 
-    Args:
-        study_results: StudyResults
-        baseline: Optional baseline case for delta reporting.
-        show: If True, display.
+    Parameters
+    ----------
+    study_results : Any
+        StudyResults
+    baseline : str | None
+        Optional baseline case for delta reporting.
+    show : bool
+        If True, display.
 
-    Returns:
+    Returns
+    -------
+    Any
         matplotlib.figure.Figure
     """
     plt = _require_matplotlib()
@@ -402,32 +491,17 @@ def comparison_dashboard(
 
 def _auto_sensitivity_panel(study_results: Any, ax: Any) -> None:
     """Auto-detect a swept parameter and plot sensitivity."""
-    from feaweld.pipeline.study import _get_nested_attr
-
-    # Try to detect which parameter was swept by checking for variation
-    test_paths = [
-        "load.axial_force", "load.bending_moment", "load.shear_force",
-        "load.pressure", "mesh.global_size", "mesh.weld_toe_size",
-        "geometry.base_thickness", "geometry.weld_leg_size",
-        "material.temperature",
-    ]
-
-    cases = list(study_results.cases.values())
-    if len(cases) < 2:
+    if len(study_results.cases) < 2:
         ax.text(0.5, 0.5, "Not enough cases for sensitivity",
                 ha="center", va="center", transform=ax.transAxes)
         ax.set_title("Parameter Sensitivity")
         return
 
-    for path in test_paths:
-        try:
-            vals = [_get_nested_attr(c, path) for c in cases]
-            if isinstance(vals[0], (int, float)) and len(set(vals)) > 1:
-                plot_parameter_sensitivity(study_results, path, "max_von_mises",
-                                          show=False, ax=ax)
-                return
-        except (AttributeError, TypeError):
-            continue
+    swept = detect_swept_parameters(study_results)
+    if swept:
+        plot_parameter_sensitivity(study_results, swept[0], "max_von_mises",
+                                   show=False, ax=ax)
+        return
 
     # Fallback: plot fatigue life comparison
     plot_metric_comparison(study_results, "fatigue_life", show=False, ax=ax)

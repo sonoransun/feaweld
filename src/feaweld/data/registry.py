@@ -58,11 +58,15 @@ class DataRegistry:
     def get_dataset_path(self, key: str) -> Path:
         """Resolve a dataset key to its file path.
 
-        Args:
-            key: Dataset key like "cct/A36" or "materials/304SS".
+        Parameters
+        ----------
+        key : str
+            Dataset key like "cct/A36" or "materials/304SS".
 
-        Raises:
-            KeyError: If the dataset is not found.
+        Raises
+        ------
+        KeyError
+            If the dataset is not found.
         """
         if key in self._datasets:
             return self._datasets[key].path

@@ -1,0 +1,22 @@
+{% macro figure_img(fig) -%}
+<img src="data:image/png;base64,{{ fig.b64 }}" alt="{{ fig.caption }}" style="max-width:100%; height:auto;"/>
+{%- endmacro %}
+
+{% macro figure_section(figures, heading="Visualizations") %}
+{% if figures %}
+<div class="section">
+    <h2>{{ heading }}</h2>
+    {% for fig in figures if fig.layout == "full" %}
+    <div class="figure-full">{{ figure_img(fig) }}<div class="figure-caption">{{ fig.caption }}</div></div>
+    {% endfor %}
+    {% set grid_figs = figures | selectattr("layout", "equalto", "grid") | list %}
+    {% if grid_figs %}
+    <div class="figure-grid">
+        {% for fig in grid_figs %}
+        <div class="figure-item">{{ figure_img(fig) }}<div class="figure-caption">{{ fig.caption }}</div></div>
+        {% endfor %}
+    </div>
+    {% endif %}
+</div>
+{% endif %}
+{% endmacro %}

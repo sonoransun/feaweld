@@ -7,7 +7,42 @@ from dataclasses import dataclass, field
 import numpy as np
 from numpy.typing import NDArray
 
-from feaweld.core.types import BoundaryCondition, LoadCase, LoadType
+from feaweld.core.types import BoundaryCondition, FEMesh, LoadCase, LoadType
+
+
+def moment_to_nodal_forces(
+    mesh: FEMesh,
+    node_set: str,
+    moment: float,
+    axis: int = 0,
+    force_dof: int = 1,
+) -> BoundaryCondition:
+    """Convert a bending moment into a self-equilibrating nodal force couple.
+
+    Each node in *node_set* receives a force along *force_dof* proportional
+    to its lever arm about the set centroid along *axis*:
+
+        f_i = M * (x_i - x_bar) / sum_j (x_j - x_bar)^2
+
+    which produces zero net force and a net moment of *moment* (N mm).
+    The returned FORCE condition carries per-node ``(n, 3)`` values.
+    """
+    node_ids = mesh.node_sets[node_set]
+    coords = mesh.nodes[node_ids][:, axis]
+    lever = coords - coords.mean()
+    denom = float(np.sum(lever ** 2))
+    if denom < 1e-30:
+        raise ValueError(
+            f"Cannot apply a moment on node set '{node_set}': all nodes share "
+            f"the same coordinate along axis {axis}."
+        )
+    values = np.zeros((len(node_ids), 3))
+    values[:, force_dof] = moment * lever / denom
+    return BoundaryCondition(
+        node_set=node_set,
+        bc_type=LoadType.FORCE,
+        values=values,
+    )
 
 
 @dataclass
@@ -101,8 +136,10 @@ class PWHTSchedule:
     def temperature_profile(self, dt: float = 60.0) -> tuple[NDArray, NDArray]:
         """Generate time (s) vs temperature (C) arrays for the PWHT cycle.
 
-        Args:
-            dt: time step in seconds
+        Parameters
+        ----------
+        dt : float
+            time step in seconds
         """
         T_ambient = 20.0
 

@@ -101,13 +101,19 @@ class BayesianUpdater:
         n_burnin: int = 200,
     ):
         """
-        Args:
-            priors: Prior distributions for each parameter
-            forward_model: Function mapping parameter dict → predicted observations
-                           Must return array matching ObservedData.values shape
-            n_walkers: Number of MCMC walkers (emcee ensemble sampler)
-            n_steps: Number of MCMC steps after burn-in
-            n_burnin: Number of burn-in steps to discard
+        Parameters
+        ----------
+        priors : list[PriorSpec]
+            Prior distributions for each parameter
+        forward_model : Callable[[dict[str, float]], NDArray]
+            Function mapping parameter dict → predicted observations.
+            Must return array matching ObservedData.values shape.
+        n_walkers : int
+            Number of MCMC walkers (emcee ensemble sampler)
+        n_steps : int
+            Number of MCMC steps after burn-in
+        n_burnin : int
+            Number of burn-in steps to discard
         """
         self.priors = priors
         self.forward_model = forward_model
@@ -211,11 +217,16 @@ class BayesianUpdater:
     ) -> dict[str, Any]:
         """Propagate posterior uncertainty through fatigue model.
 
-        Args:
-            fatigue_model: Maps material parameters → fatigue life (cycles)
-            n_predictions: Number of posterior samples to use
+        Parameters
+        ----------
+        fatigue_model : Callable[[dict[str, float]], float]
+            Maps material parameters → fatigue life (cycles)
+        n_predictions : int
+            Number of posterior samples to use
 
-        Returns:
+        Returns
+        -------
+        dict[str, Any]
             Dict with life statistics: mean, std, median, ci_95, distribution
         """
         if self._posterior_samples is None:
