@@ -664,6 +664,391 @@ def generate_sed_concept(out: Path) -> None:
     plt.close(fig)
 
 
+def generate_rainflow_spectrum_concept(out: Path) -> None:
+    """Spectrum fatigue chain: load history -> rainflow cycles -> Miner damage."""
+    plt = _setup_matplotlib()
+    from feaweld.core.types import SNCurve, SNSegment, SNStandard
+    from feaweld.fatigue.rainflow import rainflow_count
+
+    fig, (ax_hist, ax_cyc, ax_dmg) = plt.subplots(1, 3, figsize=(15, 5))
+    fig.suptitle("Spectrum Fatigue — Rainflow Counting and Miner Summation",
+                 fontweight="bold")
+
+    # Synthetic variable-amplitude history (fixed seed, incommensurate periods)
+    rng = np.random.default_rng(42)
+    t = np.linspace(0, 60, 600)
+    signal = (
+        90
+        + 55 * np.sin(2 * np.pi * t / 31)
+        + 35 * np.sin(2 * np.pi * t / 7.3 + rng.uniform(0, 2 * np.pi))
+        + 20 * np.sin(2 * np.pi * t / 3.1 + rng.uniform(0, 2 * np.pi))
+    )
+
+    # --- Panel 1: history with turning points --------------------------------
+    ax_hist.set_title("Load History", fontsize=11)
+    d = np.diff(signal)
+    tp = np.where(d[:-1] * d[1:] < 0)[0] + 1
+    ax_hist.plot(t, signal, color=DARK, linewidth=1.2, zorder=2)
+    ax_hist.plot(t[tp], signal[tp], "o", color=RED, markersize=4,
+                 markeredgecolor="white", markeredgewidth=0.4, linestyle="none",
+                 zorder=3, label=f"Turning points ({len(tp)})")
+    ax_hist.set_xlabel("Time (s)")
+    ax_hist.set_ylabel("Stress (MPa)")
+    ax_hist.legend(loc="upper right", fontsize=8)
+    ax_hist.grid(True, linestyle=":", alpha=0.3)
+    ax_hist.text(0.5, -0.22, "Variable-amplitude history reduced to peaks and valleys.",
+                 transform=ax_hist.transAxes, fontsize=8, ha="center",
+                 color=GRAY, style="italic")
+
+    # --- Panel 2: extracted rainflow cycles ----------------------------------
+    ax_cyc.set_title("Extracted Cycles (range–mean)", fontsize=11)
+    cycles = rainflow_count(signal)
+    ranges = np.array([c[0] for c in cycles])
+    means = np.array([c[1] for c in cycles])
+    counts = np.array([c[2] for c in cycles])
+    full = counts >= 1.0
+    ax_cyc.scatter(means[full], ranges[full], s=55, c=BLUE,
+                   edgecolors="white", linewidths=0.6, zorder=3,
+                   label="Full cycles (n = 1)")
+    ax_cyc.scatter(means[~full], ranges[~full], s=55, c=ORANGE, marker="^",
+                   edgecolors="white", linewidths=0.6, zorder=3,
+                   label="Half cycles (n = ½)")
+    ax_cyc.text(0.03, 0.97,
+                f"{len(cycles)} cycles extracted\n($\\Sigma n$ = {counts.sum():.1f})",
+                transform=ax_cyc.transAxes, fontsize=8, va="top",
+                bbox=dict(boxstyle="round,pad=0.35", facecolor="#eaf2f8",
+                          alpha=0.95, edgecolor="#bdc3c7"))
+    ax_cyc.set_xlabel("Mean stress (MPa)")
+    ax_cyc.set_ylabel("Stress range $\\Delta\\sigma$ (MPa)")
+    ax_cyc.legend(loc="lower right", fontsize=8)
+    ax_cyc.grid(True, linestyle=":", alpha=0.3)
+    ax_cyc.text(0.5, -0.22, "ASTM E1049 four-point rainflow pairs closed hysteresis loops.",
+                transform=ax_cyc.transAxes, fontsize=8, ha="center",
+                color=GRAY, style="italic")
+
+    # --- Panel 3: spectrum histogram + per-bin Miner damage ------------------
+    ax_dmg.set_title("Spectrum + Miner Damage", fontsize=11)
+    curve = SNCurve(
+        name="IIW FAT 90",
+        standard=SNStandard.IIW,
+        segments=[
+            SNSegment(m=3.0, C=90.0 ** 3 * 2e6, stress_threshold=52.0),
+            SNSegment(m=5.0, C=52.0 ** 5 * (90.0 ** 3 * 2e6 / 52.0 ** 3), stress_threshold=0.0),
+        ],
+        cutoff_cycles=1e7,
+    )
+    bins = np.linspace(0, ranges.max() * 1.05, 10)
+    centers = 0.5 * (bins[:-1] + bins[1:])
+    width = bins[1] - bins[0]
+    n_bin = np.zeros(len(centers))
+    d_bin = np.zeros(len(centers))
+    idx = np.clip(np.digitize(ranges, bins) - 1, 0, len(centers) - 1)
+    for b, sr, cnt in zip(idx, ranges, counts):
+        n_bin[b] += cnt
+        N_i = curve.life(sr)
+        if np.isfinite(N_i):
+            d_bin[b] += cnt / N_i
+
+    ax_dmg.bar(centers - 0.21 * width, n_bin, width=0.38 * width, color=BLUE,
+               alpha=0.85, label="Cycles $n_i$")
+    ax_dmg.set_xlabel("Stress range $\\Delta\\sigma$ (MPa)")
+    ax_dmg.set_ylabel("Cycles per repetition $n_i$", color=BLUE)
+    ax_dmg.tick_params(axis="y", labelcolor=BLUE)
+
+    ax_dmg2 = ax_dmg.twinx()
+    ax_dmg2.bar(centers + 0.21 * width, d_bin, width=0.38 * width, color=RED,
+                alpha=0.85, label="Damage $n_i/N_i$ (FAT 90)")
+    ax_dmg2.set_ylabel("Miner damage $n_i / N_i$", color=RED)
+    ax_dmg2.tick_params(axis="y", labelcolor=RED)
+    ax_dmg2.ticklabel_format(axis="y", style="sci", scilimits=(0, 0))
+
+    D_total = d_bin.sum()
+    ax_dmg.text(0.03, 0.97,
+                f"$D = \\Sigma\\, n_i/N_i$ = {D_total:.1e}\n"
+                f"Life $\\approx 1/D$ = {1.0 / D_total:.1e} repeats",
+                transform=ax_dmg.transAxes, fontsize=8, va="top",
+                bbox=dict(boxstyle="round,pad=0.35", facecolor="#eaf2f8",
+                          alpha=0.95, edgecolor="#bdc3c7"))
+    handles1, labels1 = ax_dmg.get_legend_handles_labels()
+    handles2, labels2 = ax_dmg2.get_legend_handles_labels()
+    ax_dmg.legend(handles1 + handles2, labels1 + labels2,
+                  loc="upper right", fontsize=8)
+    ax_dmg.grid(True, linestyle=":", alpha=0.3)
+    ax_dmg.text(0.5, -0.22, "Per-bin damage against IIW FAT 90 — large ranges dominate.",
+                transform=ax_dmg.transAxes, fontsize=8, ha="center",
+                color=GRAY, style="italic")
+
+    fig.tight_layout()
+    fig.savefig(out / "rainflow_spectrum_concept.svg", format="svg", bbox_inches="tight")
+    plt.close(fig)
+
+
+def generate_haigh_concept(out: Path) -> None:
+    """Haigh diagram: Goodman / Gerber / Soderberg mean-stress corrections."""
+    plt = _setup_matplotlib()
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.set_title("Haigh Diagram — Mean-Stress Corrections", fontweight="bold")
+
+    sigma_u, sigma_y, sigma_e = 500.0, 355.0, 180.0
+    sm = np.linspace(0, sigma_u, 300)
+
+    goodman = sigma_e * (1 - sm / sigma_u)
+    gerber = sigma_e * (1 - (sm / sigma_u) ** 2)
+    soderberg = np.where(sm <= sigma_y, sigma_e * (1 - sm / sigma_y), np.nan)
+
+    ax.plot(sm, goodman, color=BLUE, linewidth=2.5, label="Goodman (to $\\sigma_u$)")
+    ax.plot(sm, gerber, color=GREEN, linewidth=2, linestyle="--",
+            label="Gerber (parabola)")
+    ax.plot(sm, soderberg, color=ORANGE, linewidth=2, linestyle="-.",
+            label="Soderberg (to $\\sigma_y$)")
+
+    # Safe region below the Goodman line
+    ax.fill_between(sm, 0, goodman, color=GREEN, alpha=0.08, zorder=0)
+    ax.text(60, 55, "Safe region\n(below Goodman)", fontsize=9, color="#4a7a5a",
+            style="italic")
+
+    # Operating point and its equivalent fully-reversed amplitude
+    sm_op, sa_op = 200.0, 100.0
+    sa_r = sa_op / (1 - sm_op / sigma_u)
+    ax.plot(sm, sa_r * (1 - sm / sigma_u), color=RED, linestyle=":",
+            linewidth=1.2, alpha=0.7)
+    ax.plot(sm_op, sa_op, "o", color=RED, markersize=10, zorder=5)
+    ax.plot(0, sa_r, "*", color=RED, markersize=16, zorder=5)
+    ax.annotate("", xy=(8, sa_r), xytext=(sm_op, sa_op),
+                arrowprops=dict(arrowstyle="-|>", color=RED, lw=1.8,
+                                connectionstyle="arc3,rad=0.15"))
+    ax.annotate(f"Operating point\n($\\sigma_m$ = {sm_op:.0f}, $\\sigma_a$ = {sa_op:.0f})",
+                xy=(sm_op, sa_op), xytext=(sm_op + 45, sa_op + 45),
+                fontsize=9, color=RED, fontweight="bold",
+                arrowprops=dict(arrowstyle="->", color=RED, lw=1.2))
+    ax.text(105, 190,
+            f"Equivalent fully-reversed amplitude\n"
+            f"$\\sigma_{{ar}} = \\sigma_a / (1 - \\sigma_m/\\sigma_u)$ = {sa_r:.0f} MPa",
+            fontsize=9, color=RED, fontweight="bold")
+
+    # Material landmarks on the axes
+    ax.plot([sigma_y, sigma_u], [0, 0], "|", color=DARK, markersize=10, zorder=4)
+    ax.text(sigma_y, -14, "$\\sigma_y$", fontsize=10, ha="center", color=ORANGE,
+            fontweight="bold")
+    ax.text(sigma_u, -14, "$\\sigma_u$", fontsize=10, ha="center", color=BLUE,
+            fontweight="bold")
+    ax.text(-12, sigma_e, "$\\sigma_e$", fontsize=10, ha="right", va="center",
+            color=DARK, fontweight="bold")
+
+    ax.text(0.98, 0.55,
+            "Goodman: $\\frac{\\sigma_a}{\\sigma_{ar}} + \\frac{\\sigma_m}{\\sigma_u} = 1$\n\n"
+            "Gerber: $\\frac{\\sigma_a}{\\sigma_{ar}} + \\left(\\frac{\\sigma_m}{\\sigma_u}\\right)^2 = 1$\n\n"
+            "Soderberg: $\\frac{\\sigma_a}{\\sigma_{ar}} + \\frac{\\sigma_m}{\\sigma_y} = 1$",
+            transform=ax.transAxes, fontsize=9, ha="right", va="top",
+            bbox=dict(boxstyle="round,pad=0.4", facecolor="#eaf2f8", alpha=0.95,
+                      edgecolor="#bdc3c7"))
+
+    ax.set_xlabel("Mean stress $\\sigma_m$ (MPa)")
+    ax.set_ylabel("Stress amplitude $\\sigma_a$ (MPa)")
+    ax.set_xlim(-25, sigma_u + 25)
+    ax.set_ylim(-25, sa_r + 60)
+    ax.legend(loc="upper right", fontsize=9)
+    ax.grid(True, linestyle=":", alpha=0.3)
+
+    fig.tight_layout()
+    fig.savefig(out / "haigh_mean_stress_concept.svg", format="svg", bbox_inches="tight")
+    plt.close(fig)
+
+
+def generate_residual_stress_integration(out: Path) -> None:
+    """Residual stress in the fatigue chain: profile -> mean-stress shift."""
+    plt = _setup_matplotlib()
+    from feaweld.data.residual_stress import evaluate_residual_stress
+
+    sigma_y = 355.0
+    fig, (ax_prof, ax_trace) = plt.subplots(1, 2, figsize=(13, 5.5))
+    fig.suptitle("Residual Stress in the Fatigue Assessment", fontweight="bold")
+
+    # --- Panel 1: through-thickness profiles (bundled dataset) ---------------
+    ax_prof.set_title("Through-Thickness Profile (butt weld)", fontsize=11)
+    zz = np.linspace(0, 1, 200)
+    aw = evaluate_residual_stress("BS7910_Level2_butt", zz, sigma_y) / sigma_y
+    pwht = evaluate_residual_stress("PWHT_butt", zz, sigma_y) / sigma_y
+
+    ax_prof.plot(aw, zz, color=RED, linewidth=2.5, label="As-welded (BS 7910 L2)")
+    ax_prof.plot(pwht, zz, color=BLUE, linewidth=2, linestyle="--", label="After PWHT")
+    ax_prof.fill_betweenx(zz, 0, aw, color=RED, alpha=0.07)
+    ax_prof.axvline(0, color=GRAY, linewidth=0.8)
+    ax_prof.text(-0.06, 0.97, "compression", fontsize=7, ha="right", color=GRAY)
+    ax_prof.text(0.06, 0.97, "tension", fontsize=7, ha="left", color=GRAY)
+
+    # Surface values feed the fatigue mean-stress shift
+    ax_prof.plot(aw[0], 0, "o", color=RED, markersize=9, zorder=5)
+    ax_prof.plot(pwht[0], 0, "o", color=BLUE, markersize=9, zorder=5)
+    ax_prof.annotate(f"$\\sigma_{{res}}(0)$ = {aw[0]:.2f} $\\sigma_y$",
+                     xy=(aw[0], 0), xytext=(0.45, 0.14), fontsize=9, color=RED,
+                     fontweight="bold",
+                     arrowprops=dict(arrowstyle="->", color=RED, lw=1.2))
+    ax_prof.annotate(f"{pwht[0]:.2f} $\\sigma_y$",
+                     xy=(pwht[0], 0), xytext=(0.02, 0.24), fontsize=9, color=BLUE,
+                     fontweight="bold",
+                     arrowprops=dict(arrowstyle="->", color=BLUE, lw=1.2))
+    ax_prof.text(1.02, 0.02, "weld toe surface", fontsize=8, color="#555",
+                 va="top", ha="right", transform=ax_prof.get_yaxis_transform())
+    ax_prof.text(1.02, 0.98, "back face", fontsize=8, color="#555",
+                 va="bottom", ha="right", transform=ax_prof.get_yaxis_transform())
+
+    ax_prof.set_xlabel("$\\sigma_{res} / \\sigma_y$")
+    ax_prof.set_ylabel("$z / t$")
+    ax_prof.set_xlim(-0.48, 1.15)
+    ax_prof.set_ylim(1.03, -0.03)
+    ax_prof.legend(loc="center left", fontsize=8)
+    ax_prof.grid(True, linestyle=":", alpha=0.3)
+
+    # --- Panel 2: mean-stress shift of the applied cycle ---------------------
+    ax_trace.set_title("Mean-Stress Shift of the Applied Cycle", fontsize=11)
+    res_aw = evaluate_residual_stress("BS7910_Level2_butt", 0.0, sigma_y)
+    res_pwht = evaluate_residual_stress("PWHT_butt", 0.0, sigma_y)
+    delta = 120.0
+    t_c = np.linspace(0, 4, 400)
+    applied = delta / 2 * (1 - np.cos(2 * np.pi * t_c))
+    # As-welded: sigma_res = sigma_y, so the cycle shakes down to peak at yield
+    trace_aw = sigma_y - delta + applied
+    trace_pwht = res_pwht + applied
+
+    ax_trace.plot(t_c, applied, color=GRAY, linewidth=1.5, linestyle=":",
+                  label=f"Applied ($\\Delta\\sigma$ = {delta:.0f}, R = 0)")
+    ax_trace.plot(t_c, trace_pwht, color=BLUE, linewidth=2,
+                  label=f"PWHT: + {res_pwht:.0f} MPa")
+    ax_trace.plot(t_c, trace_aw, color=RED, linewidth=2,
+                  label=f"As-welded: + $\\sigma_{{res}}$ = {res_aw:.0f} MPa")
+    ax_trace.axhline(sigma_y, color=DARK, linestyle="--", linewidth=1, alpha=0.6)
+    ax_trace.text(0.1, sigma_y + 10, f"$\\sigma_y$ = {sigma_y:.0f} MPa",
+                  fontsize=8, color=DARK)
+    ax_trace.text(2.6, sigma_y + 17,
+                  "shakedown: peak limited to $\\sigma_y$",
+                  fontsize=7, color=GRAY, style="italic", ha="center")
+
+    # Shifted ranges: same delta-sigma, higher effective R-ratio
+    r_aw = (sigma_y - delta) / sigma_y
+    r_pwht = res_pwht / (res_pwht + delta)
+    for lo, color, r_eff in [(sigma_y - delta, RED, r_aw), (res_pwht, BLUE, r_pwht)]:
+        ax_trace.annotate("", xy=(4.2, lo + delta), xytext=(4.2, lo),
+                          arrowprops=dict(arrowstyle="<->", color=color, lw=1.5))
+        ax_trace.text(4.35, lo + delta / 2,
+                      f"$\\Delta\\sigma$ = {delta:.0f}\n$R_{{eff}}$ = {r_eff:.2f}",
+                      fontsize=8, color=color, va="center")
+
+    ax_trace.set_xlabel("Time (cycles)")
+    ax_trace.set_ylabel("Stress (MPa)")
+    ax_trace.set_xlim(0, 6.0)
+    ax_trace.set_ylim(-25, 425)
+    ax_trace.legend(loc="lower right", fontsize=8)
+    ax_trace.grid(True, linestyle=":", alpha=0.3)
+
+    fig.text(0.5, -0.02,
+             "Residual stress leaves $\\Delta\\sigma$ unchanged but raises the effective "
+             "mean / R-ratio — captured by superposition or a Goodman/Gerber correction.",
+             ha="center", fontsize=9, style="italic",
+             bbox=dict(boxstyle="round,pad=0.4", facecolor="#fef9e7", alpha=0.9,
+                       edgecolor="#f5cba7"))
+
+    fig.tight_layout()
+    fig.savefig(out / "residual_stress_integration_concept.svg", format="svg",
+                bbox_inches="tight")
+    plt.close(fig)
+
+
+def generate_hotspot_3d_stations(out: Path) -> None:
+    """3-D hot-spot assessment: extrapolation stations along the weld toe line."""
+    plt = _setup_matplotlib()
+
+    fig, (ax_iso, ax_prof) = plt.subplots(
+        2, 1, figsize=(10, 8.5), gridspec_kw={"height_ratios": [1.5, 1]})
+    fig.suptitle("3-D Hot-Spot Stress — Stations Along the Weld Toe Line",
+                 fontweight="bold")
+
+    # --- Top: pseudo-perspective plate with toe line and stations ------------
+    ax_iso.set_title("Extrapolation stations on the toe line", fontsize=11)
+
+    def persp(x: float, z: float) -> tuple[float, float]:
+        # Skew (x = distance from toe, z = along weld) into screen coordinates
+        return x + 0.45 * z, 0.30 * z
+
+    L = 100.0
+    t_pl = 10.0
+    plate = [persp(0, 0), persp(35, 0), persp(35, L), persp(0, L)]
+    ax_iso.fill(*zip(*plate), color="#dfe6e9", edgecolor=GRAY, linewidth=1.5)
+    weld = [persp(-7, 0), persp(0, 0), persp(0, L), persp(-7, L)]
+    ax_iso.fill(*zip(*weld), color="#bdc3c7", edgecolor=GRAY, linewidth=1.2, hatch="//")
+
+    (x0, y0), (x1, y1) = persp(0, 0), persp(0, L)
+    ax_iso.plot([x0, x1], [y0, y1], color=DARK, linewidth=3, zorder=4)
+    toe_angle = np.degrees(np.arctan2(0.30, 0.45))
+    ax_iso.text(*persp(-11.5, 48), "Weld toe line", fontsize=9, color=DARK,
+                fontweight="bold", ha="center", rotation=toe_angle)
+
+    z_stations = np.array([10.0, 30.0, 50.0, 70.0, 90.0])
+    z_gov = 50.0
+    for z_s in z_stations:
+        for x_ref in (0.4 * t_pl, 1.0 * t_pl):
+            ax_iso.plot(*persp(x_ref, z_s), "o", color=BLUE, markersize=5, zorder=5)
+        ax_iso.annotate("", xy=persp(0.3, z_s), xytext=persp(13, z_s),
+                        arrowprops=dict(arrowstyle="-|>", color=BLUE, lw=1.3))
+    ax_iso.text(*persp(4, 4), "0.4t", fontsize=8, color=BLUE, ha="center", va="top")
+    ax_iso.text(*persp(10.5, 2), "1.0t", fontsize=8, color=BLUE, ha="center", va="top")
+    ax_iso.text(*persp(17, 32), "linear extrapolation\nto the toe", fontsize=8,
+                color=BLUE, style="italic", ha="center", rotation=toe_angle)
+
+    ax_iso.plot(*persp(0, z_gov), "*", color=RED, markersize=17, zorder=6)
+    ax_iso.annotate("Governing station\n(max $\\sigma_{hs}$)",
+                    xy=persp(0, z_gov), xytext=(3, 26), fontsize=9, color=RED,
+                    fontweight="bold", ha="center",
+                    arrowprops=dict(arrowstyle="->", color=RED, lw=1.5))
+
+    ax_iso.annotate("", xy=persp(39, 36), xytext=persp(39, 10),
+                    arrowprops=dict(arrowstyle="-|>", color=GRAY, lw=1.5))
+    ax_iso.text(*persp(43.5, 22), "$z$ (along weld)", fontsize=8, color=GRAY,
+                ha="center", va="center", rotation=toe_angle)
+
+    ax_iso.text(0.99, 0.02,
+                "At each station: extrapolate $\\sigma$ at 0.4t and 1.0t\n"
+                "to the toe (IIW Type A); assess the maximum.",
+                transform=ax_iso.transAxes, fontsize=8, ha="right", va="bottom",
+                bbox=dict(boxstyle="round,pad=0.4", facecolor="#eaf2f8", alpha=0.95,
+                          edgecolor="#bdc3c7"))
+
+    ax_iso.set_xlim(-15, 84)
+    ax_iso.set_ylim(-4, 33)
+    ax_iso.set_aspect("equal")
+    ax_iso.axis("off")
+
+    # --- Bottom: hot-spot stress profile along the toe line ------------------
+    ax_prof.set_title("Hot-spot stress along the toe line", fontsize=11)
+    z = np.linspace(0, L, 300)
+    sigma_hs = 160.0 + 55.0 * np.exp(-(((z - z_gov) / 22.0) ** 2))
+    sigma_st = 160.0 + 55.0 * np.exp(-(((z_stations - z_gov) / 22.0) ** 2))
+
+    ax_prof.plot(z, sigma_hs, color=DARK, linewidth=2, label="$\\sigma_{hs}(z)$")
+    ax_prof.plot(z_stations, sigma_st, "o", color=BLUE, markersize=8, zorder=5,
+                 label="Stations")
+    s_max = sigma_st.max()
+    ax_prof.plot(z_gov, s_max, "*", color=RED, markersize=17, zorder=6)
+    ax_prof.axhline(s_max, color=RED, linestyle=":", alpha=0.4, linewidth=0.8)
+    ax_prof.annotate(f"max $\\sigma_{{hs}}$ = {s_max:.0f} MPa $\\rightarrow$ fatigue check",
+                     xy=(z_gov, s_max), xytext=(z_gov + 14, s_max - 9),
+                     fontsize=9, color=RED, fontweight="bold",
+                     arrowprops=dict(arrowstyle="->", color=RED, lw=1.5))
+
+    ax_prof.set_xlabel("Position along weld toe $z$ (mm)")
+    ax_prof.set_ylabel("$\\sigma_{hs}$ (MPa)")
+    ax_prof.set_xlim(0, L)
+    ax_prof.set_ylim(145, 235)
+    ax_prof.legend(loc="upper left", fontsize=9)
+    ax_prof.grid(True, linestyle=":", alpha=0.3)
+
+    fig.tight_layout()
+    fig.savefig(out / "hotspot_3d_stations_concept.svg", format="svg",
+                bbox_inches="tight")
+    plt.close(fig)
+
+
 # ============================================================================
 # Example Output Gallery (using feaweld API with synthetic data)
 # ============================================================================
@@ -731,6 +1116,107 @@ def generate_example_sn_curve(out: Path) -> None:
     )
     fig = plot_sn_curve(curve, stress_range=120.0, show=False)
     fig.savefig(out / "example_sn_curve.svg", format="svg", bbox_inches="tight")
+    plt.close(fig)
+
+
+def generate_sn_standards_comparison(out: Path) -> None:
+    """Overlay of weld-detail design S-N curves from six standards."""
+    plt = _setup_matplotlib()
+    from matplotlib.ticker import FixedLocator, NullFormatter, ScalarFormatter
+    from feaweld.fatigue.sn_curves import (
+        aws_curve, bs7608_curve, dnv_curve, ec3_curve, iiw_fat,
+    )
+
+    fig, ax = plt.subplots(figsize=(10, 6.5))
+    ax.set_title("Design S-N Curves — Standards Comparison", fontweight="bold")
+
+    n_min, n_max = 1e4, 3e8
+    ec3 = ec3_curve(90)
+    # These ~category-90 details share nearly identical m = 3 branches, so
+    # stagger linewidth / z-order and phase-shift equal-period dashes to keep
+    # every curve visible where they coincide.
+    entries = [
+        (iiw_fat(90), "IIW FAT 90", BLUE, "-", 3.4, 2.0),
+        (ec3, "EC3 detail category 90", RED, "-", 1.2, 3.6),
+        (bs7608_curve("D"), "BS 7608 class D", GREEN, (0, (3, 6)), 2.2, 2.6),
+        (bs7608_curve("F"), "BS 7608 class F", "#16a085", "-", 2.0, 2.4),
+        (aws_curve("C"), "AWS D1.1 category C", "#9b59b6", (3, (3, 6)), 2.2, 3.0),
+        (dnv_curve("D"), "DNV-RP-C203 curve D", ORANGE, (6, (3, 6)), 2.2, 2.2),
+    ]
+
+    for curve, label, color, ls, lw, z in entries:
+        # Sample each segment from its upper bound down to its threshold and
+        # evaluate N = life(S); the finite-life polyline ends at the cutoff.
+        N_parts: list[np.ndarray] = []
+        S_parts: list[np.ndarray] = []
+        for idx, seg in enumerate(curve.segments):
+            if idx == 0:
+                s_hi = (seg.C / n_min) ** (1.0 / seg.m)
+            else:
+                s_hi = curve.segments[idx - 1].stress_threshold
+            s_lo = seg.stress_threshold
+            if s_lo <= 0.0:
+                s_lo = (seg.C / curve.cutoff_cycles) ** (1.0 / seg.m)
+            s = np.logspace(np.log10(s_hi), np.log10(s_lo), 80)
+            N_parts.append(np.array([curve.life(v) for v in s]))
+            S_parts.append(s)
+        N = np.concatenate(N_parts)
+        S = np.concatenate(S_parts)
+        keep = np.isfinite(N) & (N <= n_max)
+        ax.loglog(N[keep], S[keep], color=color, linewidth=lw, linestyle=ls,
+                  zorder=z, label=label)
+
+        # Knee points (slope transitions)
+        for seg_above in curve.segments[:-1]:
+            s_knee = seg_above.stress_threshold
+            ax.plot(curve.life(s_knee), s_knee, "D", color=color,
+                    markersize=4, zorder=5)
+
+        # Below the last threshold life is infinite: draw the flat CAFL tail.
+        s_cafl = curve.segments[-1].stress_threshold
+        if s_cafl > 0.0:
+            n_cafl = curve.life(s_cafl)
+            if np.isfinite(n_cafl) and n_cafl < n_max:
+                ax.loglog([n_cafl, n_max], [s_cafl, s_cafl], ":",
+                          color=color, linewidth=0.65 * lw, alpha=0.8, zorder=z)
+                ax.plot(n_cafl, s_cafl, "o", color=color, markersize=4, zorder=5)
+
+    # Reference life used to define detail categories / FAT classes
+    ax.axvline(2e6, color=GRAY, linestyle=":", alpha=0.5, linewidth=1)
+    ax.text(2e6 * 1.25, 640, "$N = 2\\times10^6$\n(reference life)",
+            fontsize=8, color=GRAY, ha="left", va="top")
+
+    # EC3 has its knee earlier than the IIW/DNV/BS 1e7 convention
+    s_knee_ec3 = ec3.segments[0].stress_threshold
+    ax.annotate("EC3 knee\n($N_D = 5\\times10^6$)",
+                xy=(ec3.life(s_knee_ec3), s_knee_ec3), xytext=(4e5, 41),
+                fontsize=8, color=RED, ha="center",
+                arrowprops=dict(arrowstyle="->", color=RED, lw=1.0))
+
+    ax.text(1.5e5, 255, "$m$ = 3 finite-life branches nearly coincide",
+            fontsize=8, color=GRAY, style="italic", rotation=-30,
+            ha="center", va="bottom")
+
+    ax.text(0.02, 0.03,
+            "Dotted tails: constant-amplitude fatigue limit\n"
+            "(infinite design life below the threshold)",
+            transform=ax.transAxes, fontsize=8, va="bottom",
+            bbox=dict(boxstyle="round,pad=0.35", facecolor="#eaf2f8",
+                      alpha=0.95, edgecolor="#bdc3c7"))
+
+    ax.set_xlabel("Cycles to failure $N$")
+    ax.set_ylabel("Stress range $\\Delta\\sigma$ (MPa)")
+    ax.set_xlim(n_min, n_max)
+    ax.set_ylim(22, 800)
+    ax.yaxis.set_major_locator(FixedLocator([30, 50, 70, 100, 150, 200, 300, 500]))
+    ax.yaxis.set_major_formatter(ScalarFormatter())
+    ax.yaxis.set_minor_formatter(NullFormatter())
+    ax.legend(loc="upper right", fontsize=9)
+    ax.grid(True, which="both", linestyle=":", alpha=0.3)
+
+    fig.tight_layout()
+    fig.savefig(out / "sn_standards_comparison.svg", format="svg",
+                bbox_inches="tight")
     plt.close(fig)
 
 
@@ -1142,6 +1628,112 @@ def generate_3d_deformed_screenshot(out: Path) -> None:
     plotter.close()
 
 
+def generate_3d_joint_screenshot(out: Path) -> None:
+    """Extruded fillet T-joint from the real 3-D pipeline with toe lines.
+
+    Unlike the synthetic block above, this runs the actual geometry + meshing
+    stages (``FilletTJoint(dimension=3)`` -> Gmsh -> ``FEMesh``) and overlays
+    the ``weld_toe_{i}`` node sets as red tubes plus hot-spot stations along
+    the governing toe line.
+    """
+    try:
+        import pyvista as pv
+    except ImportError:
+        print("(pyvista unavailable, skipping)", end=" ")
+        return
+    try:
+        import gmsh
+    except ImportError:
+        print("(gmsh unavailable, skipping)", end=" ")
+        return
+
+    from feaweld.geometry.joints import FilletTJoint
+    from feaweld.mesh.generator import WeldMeshConfig, generate_mesh
+    from feaweld.visualization.export import export_png
+    from feaweld.visualization.stress_plots import _mesh_to_pyvista_grid
+    from feaweld.visualization.theme import configure_plotter
+
+    # Real 3-D pipeline: extruded joint + tet mesh with toe-line refinement.
+    joint = FilletTJoint(
+        base_width=60.0,
+        base_thickness=10.0,
+        web_height=30.0,
+        web_thickness=8.0,
+        weld_leg_size=6.0,
+        length=40.0,
+        dimension=3,
+    )
+    config = WeldMeshConfig(
+        global_size=5.0,
+        weld_toe_size=1.5,
+        weld_region_size=2.5,
+        refinement_distance=8.0,
+        element_order=1,
+        element_type_2d="tri",
+    )
+    # The script runs many generators in one process: make sure no stale Gmsh
+    # session bleeds in, and none bleeds out even if meshing fails part-way
+    # (generate_mesh itself finalizes only on success).
+    if gmsh.is_initialized():
+        gmsh.finalize()
+    try:
+        gmsh.initialize()
+        gmsh.option.setNumber("General.Terminal", 0)  # keep script output clean
+        mesh = generate_mesh(joint, config)
+    finally:
+        if gmsh.is_initialized():
+            gmsh.finalize()
+
+    grid = _mesh_to_pyvista_grid(mesh)
+
+    plotter = pv.Plotter(off_screen=True)
+    configure_plotter(plotter)
+
+    # Plates in the light steel used by the 2-D schematics; the two weld
+    # volumes (physical groups) in the darker weld gray.  Disjoint cell sets
+    # avoid z-fighting between the overlays.
+    weld_cells = np.concatenate(
+        [mesh.physical_groups["weld_left"], mesh.physical_groups["weld_right"]]
+    )
+    plate_cells = np.setdiff1d(np.arange(mesh.n_elements), weld_cells)
+    plotter.add_mesh(grid.extract_cells(plate_cells), color="#dfe6e9",
+                     show_edges=True, edge_color="gray", edge_opacity=0.35)
+    plotter.add_mesh(grid.extract_cells(weld_cells), color="#bdc3c7",
+                     show_edges=True, edge_color=DARK, edge_opacity=0.4)
+
+    # Weld-toe lines: the swept ``weld_toe_{i}`` node sets, ordered along z.
+    for i in range(len(joint.get_weld_toe_points())):
+        pts = mesh.nodes[mesh.node_sets[f"weld_toe_{i}"]]
+        pts = pts[np.argsort(pts[:, 2])]
+        plotter.add_mesh(pv.lines_from_points(pts).tube(radius=0.45), color=RED)
+
+    # Hot-spot stations along the governing (right base-plate) toe line.
+    (tx, ty, _), (_, _, tz1) = joint.get_weld_toe_lines()[3]
+    for frac in (0.1, 0.3, 0.5, 0.7, 0.9):
+        governing = frac == 0.5
+        plotter.add_mesh(
+            pv.Sphere(radius=1.6 if governing else 1.2,
+                      center=(tx, ty, frac * tz1)),
+            color=DARK if governing else BLUE,
+        )
+
+    plotter.add_text(
+        "Extruded Fillet T-Joint (dimension: 3)\n"
+        "weld-toe lines (red) with hot-spot stations",
+        position="upper_left", font_size=11, color=DARK,
+    )
+    plotter.add_axes()
+
+    # Oblique view from front-top-right so the z extrusion depth reads.
+    center = np.asarray(grid.center)
+    plotter.camera_position = [
+        tuple(center + np.array([80.0, 55.0, 95.0])), tuple(center), (0, 1, 0),
+    ]
+    plotter.camera.zoom(1.2)
+    export_png(plotter, str(out / "example_3d_joint.png"), resolution=(1200, 800))
+    plotter.close()
+
+
 # ============================================================================
 # Main
 # ============================================================================
@@ -1158,10 +1750,15 @@ def main():
         ("sn_concept", generate_sn_concept),
         ("dong_concept", generate_dong_concept),
         ("sed_concept", generate_sed_concept),
+        ("rainflow_spectrum_concept", generate_rainflow_spectrum_concept),
+        ("haigh_mean_stress_concept", generate_haigh_concept),
+        ("residual_stress_integration_concept", generate_residual_stress_integration),
+        ("hotspot_3d_stations_concept", generate_hotspot_3d_stations),
         ("weld_groups_gallery", generate_weld_groups_gallery),
         ("example_through_thickness", generate_example_through_thickness),
         ("example_hotspot", generate_example_hotspot),
         ("example_sn_curve", generate_example_sn_curve),
+        ("sn_standards_comparison", generate_sn_standards_comparison),
         ("example_dong", generate_example_dong),
         ("example_asme_check", generate_example_asme_check),
         ("architecture_overview", generate_architecture_overview),
@@ -1174,6 +1771,7 @@ def main():
         ("example_multiscale", generate_example_multiscale),
         ("example_3d_stress", generate_3d_stress_screenshot),
         ("example_3d_deformed", generate_3d_deformed_screenshot),
+        ("example_3d_joint", generate_3d_joint_screenshot),
     ]
 
     for name, gen_fn in generators:

@@ -73,7 +73,7 @@ A residual-stress case (thermomechanical welding pass) followed by PWHT:
 ```yaml
 name: fillet_t_pwht
 material:
-  base_metal: A387_Gr91     # a creep-capable material (defines creep_A/n/m)
+  base_metal: A387_22       # creep-capable 2.25Cr-1Mo grade (defines creep_A/n/m)
 geometry:
   joint_type: fillet_t
   base_thickness: 20.0
@@ -113,6 +113,31 @@ not what PWHT is meant to represent:
     unchanged. Choose a material grade with creep data (or set the parameters on a
     custom material) for a meaningful relaxation.
 
+## Residual stress in the fatigue assessment
+
+There is one exception to the warning above: when the case also configures a
+residual stress for fatigue (`fatigue.residual_stress` with a `profile`, `value`,
+or `as_welded`), PWHT relaxes **that residual stress** instead of the solved load
+field — which is what PWHT physically does. A single-element Norton-Bailey probe
+computes the relaxation factor, recorded as
+`metadata["pwht_residual_relaxation"]`, the elastic load field is left untouched,
+and the fatigue assessment consumes the relaxed residual as its mean stress:
+
+```yaml
+thermal:
+  pwht_enabled: true
+fatigue:
+  r_ratio: 0.1
+  cycles: 2.0e6
+  mean_stress_correction: goodman
+  residual_stress:
+    as_welded: true          # starts at yield magnitude, then PWHT-relaxed
+```
+
+See the [Fatigue assessment guide](fatigue_assessment.md#residual-stress) for the
+residual-stress sources, the `superimpose` option, and the mean-stress
+correction the relaxed value feeds into.
+
 ## Comparing as-welded vs. PWHT
 
 The shipped example `examples/pwht_comparison.py` runs a case with and without PWHT
@@ -125,3 +150,5 @@ given schedule.
   relaxation.
 - [Loads & boundary conditions](loads_and_bcs.md) — how the welding thermal
   boundary and heat input are built.
+- [Fatigue assessment](fatigue_assessment.md) — residual stress and mean-stress
+  corrections in the fatigue chain.

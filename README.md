@@ -10,7 +10,7 @@ Finite element analysis toolkit for weld joint stress, fatigue life, and structu
 
 feaweld is a Python package for engineers who need to evaluate welded connections in metal structures. It covers the full analysis workflow from parametric joint geometry and mesh generation through FEA solving, post-processing, fatigue assessment, and visualization — producing HTML reports with embedded engineering figures.
 
-The package implements methods from major welding and pressure vessel codes (ASME VIII, IIW, DNV-RP-C203, AWS D1.1, BS 7910, API 579) and ships with a reference database of 49 materials, 80 IIW weld detail categories, S-N curves for three standards, CCT diagrams for 20 steel grades, and parametric SCF data for 10 weld geometries. Analysis cases are defined in YAML and can be run individually or as concurrent parametric studies with automated comparison reporting.
+The package implements methods from major welding and pressure vessel codes (ASME VIII, IIW, DNV-RP-C203, AWS D1.1, BS 7910, API 579) and ships with a reference database of 49 materials, 100 IIW weld detail categories, S-N curves for six standards (IIW, DNV, ASME, Eurocode 3, BS 7608, AWS D1.1), CCT diagrams for 20 steel grades, and parametric SCF data for 10 weld geometries. Analysis cases are defined in YAML — as 2D sections or extruded 3D solids, with optional spectrum (variable-amplitude) fatigue loading — and can be run individually or as concurrent parametric studies with automated comparison reporting.
 
 Beyond conventional deterministic methods, feaweld includes probabilistic fatigue assessment (Monte Carlo with Latin Hypercube Sampling), machine-learning fatigue predictors (Random Forest / XGBoost with transfer learning), multi-scale material modeling (Hall-Petch, dislocation density, phase transformation), and a digital twin framework for real-time sensor integration and Bayesian model updating.
 
@@ -45,6 +45,14 @@ Beyond conventional deterministic methods, feaweld includes probabilistic fatigu
 <td><em>3D von Mises stress contour (PyVista, embedded in HTML reports)</em></td>
 <td><em>Sobol global sensitivity indices from probabilistic analysis</em></td>
 </tr>
+<tr>
+<td width="50%"><img src="docs/images/example_3d_joint.png" alt="Extruded 3D Joint"></td>
+<td width="50%"><img src="docs/images/sn_standards_comparison.svg" alt="S-N Standards Comparison"></td>
+</tr>
+<tr>
+<td><em>Extruded 3D fillet T-joint with weld toe line (geometry.dimension: 3)</em></td>
+<td><em>Design S-N curves compared across the six supported standards</em></td>
+</tr>
 </table>
 
 ## How It Works
@@ -55,6 +63,14 @@ feaweld supports five parametric weld joint geometries, each defined by plate th
 
 <p align="center">
   <img src="docs/images/joint_types.svg" alt="Joint types" width="90%">
+</p>
+
+### 3D Analysis
+
+Setting `geometry.dimension: 3` extrudes any of the five joint sections along its length into a solid model; hot-spot stress is then evaluated at stations along each weld toe line, and the governing line and station are reported:
+
+<p align="center">
+  <img src="docs/images/example_3d_joint.png" alt="Extruded 3D joint" width="75%">
 </p>
 
 ### Hot-Spot Stress Method
@@ -75,10 +91,18 @@ ASME VIII Division 2 decomposes the actual stress distribution into membrane, be
 
 ### S-N Fatigue Assessment
 
-Fatigue life is predicted using S-N curves from IIW, DNV, or ASME standards with proper handling of the knee point (CAFL) and variable-amplitude loading via Miner's rule:
+Fatigue life is predicted using S-N curves from six standards — IIW, DNV, ASME, Eurocode 3, BS 7608, and AWS D1.1 — with proper handling of the knee point (CAFL) and variable-amplitude loading via Miner's rule (the Visual Overview above compares the six design curves):
 
 <p align="center">
   <img src="docs/images/sn_concept.svg" alt="S-N curve fundamentals" width="75%">
+</p>
+
+### Spectrum & Mean-Stress Fatigue
+
+A top-level `fatigue:` block in the case YAML turns the one-shot check into a spectrum assessment — cyclic loading defined as an R-ratio, load blocks, or a stress history that is rainflow-counted (ASTM E1049) and Miner-summed on any of the six S-N standards, with optional Goodman/Gerber mean-stress correction (which can include a residual-stress mean) and thickness, surface-finish, and environment knockdowns:
+
+<p align="center">
+  <img src="docs/images/rainflow_spectrum_concept.svg" alt="Rainflow spectrum fatigue" width="85%">
 </p>
 
 ### Dong Mesh-Insensitive Structural Stress
@@ -111,7 +135,8 @@ The Lazzarin SED method averages strain energy density over a control volume at 
 - Dual FEA solver backend: FEniCSx (nonlinear thermomechanical) and CalculiX (standard linear/thermal)
 - Six YAML-selectable solver types: linear elastic, elastoplastic (J2 radial return), steady/transient thermal, sequentially coupled thermomechanical, and creep relaxation
 - Full load application from YAML: axial, shear, bending moment (self-equilibrating nodal couples), pressure, and thermal-expansion loading
-- Five parametric joint types: fillet T-joint, butt weld, lap joint, corner joint, cruciform
+- Five parametric joint types: fillet T-joint, butt weld (groove angle, root gap, penetration), lap joint, corner joint, cruciform
+- 2D section models or extruded 3D solids (`geometry.dimension: 3`) with tetrahedral meshing and weld-toe-line refinement
 - Goldak double-ellipsoid heat source for welding simulation with element birth-death
 - Norton-Bailey creep for post-weld heat treatment (PWHT) stress relaxation, wired into the YAML pipeline
 - Global-local submodeling: cut-boundary displacement transfer with a refined local FE re-solve
@@ -124,8 +149,9 @@ The Lazzarin SED method averages strain energy density over a control volume at 
 
 **Fatigue Assessment**
 - Eight post-processing methods: nominal (ASME VIII), hot-spot (IIW Type A/B), Battelle/Dong mesh-insensitive structural stress, effective notch stress (FAT225), strain energy density (Lazzarin), through-thickness linearization, Blodgett hand calculations
-- S-N curves: 14 IIW FAT classes, 17 DNV-RP-C203 categories, ASME VIII ferritic/austenitic
-- Rainflow cycle counting (ASTM E1049), Palmgren-Miner cumulative damage, Goodman/Gerber mean stress correction
+- S-N curves: 14 IIW FAT classes, 14 DNV-RP-C203 categories, ASME VIII ferritic/austenitic, 14 Eurocode 3 detail categories, BS 7608 classes B–W1, AWS D1.1 categories A–E'
+- Rainflow cycle counting (ASTM E1049), Palmgren-Miner cumulative damage, Goodman/Gerber mean stress correction — spectrum loading defined directly in the case YAML (R-ratio, blocks, or a stress history file)
+- Residual stress feeding the fatigue mean stress (bundled profiles, fixed value, or as-welded yield, with PWHT relaxation) and weld joint efficiency factors scaling the ASME allowable checks
 - Fatigue knockdown factors for surface finish, size, environment
 
 **Visualization**
@@ -154,7 +180,8 @@ The Lazzarin SED method averages strain energy density over a control volume at 
 - 49 materials with temperature-dependent properties (carbon steel, stainless, high-strength, pipeline, aluminum, filler metals)
 - Lazy-loading data cache with LRU eviction for on-demand access
 - SCF parametric coefficients for 10 weld geometries
-- 80 IIW weld detail-to-FAT class mappings
+- 100 IIW weld detail-to-FAT class mappings
+- S-N curve data files for Eurocode 3 (14 detail categories), BS 7608 (8 classes with mean and design constants), and AWS D1.1 (7 categories)
 - CCT diagrams for 20 steel grades
 - Residual stress profiles from BS 7910, API 579, R6, FITNET, DNV
 - 82 AWS A5 filler metal classifications with base metal matching
@@ -169,6 +196,15 @@ pip install -e ".[viz]"    # core + matplotlib + pyvista
 
 # Run an analysis from YAML
 feaweld run examples/fillet_t_joint.yaml
+
+# Spectrum (variable-amplitude) fatigue from a stress history
+feaweld run examples/spectrum_fatigue.yaml
+
+# Extruded 3D analysis with hot-spot stations along the weld toe
+feaweld run examples/fillet_t_joint_3d.yaml
+
+# Standalone S-N fatigue check, no FEA needed
+feaweld fatigue --stress-range 90 -c EC3_90
 
 # Blodgett hand calculation
 feaweld blodgett -g box --d 100 --b 50 -t 5 -P 50000
@@ -224,19 +260,21 @@ ASME VIII Division 2 stress categorization with gradient utilization display and
 | Standard | Implementation |
 |----------|---------------|
 | ASME VIII Division 2 | Stress categorization, allowable checks, design fatigue curves |
-| IIW-2006-09 / IIW-2008 | 14 FAT classes, 80 weld detail categories, hot-spot stress, effective notch stress |
-| DNV-RP-C203 | 17 S-N curve categories (in-air and seawater) |
+| IIW-2006-09 / IIW-2008 | 14 FAT classes, 100 weld detail categories, hot-spot stress, effective notch stress |
+| DNV-RP-C203 | 14 S-N curve categories (in-air; seawater via environment knockdown) |
+| Eurocode 3 (EN 1993-1-9) | S-N detail categories (14 categories, two-slope) |
+| BS 7608 | S-N classes B–W1, mean and design curves |
 | ASME 2007 Annex 5-C | Battelle/Dong mesh-insensitive structural stress, master S-N curve |
-| ASTM E1049 | Rainflow cycle counting |
+| ASTM E1049 | Rainflow cycle counting, spectrum fatigue via Palmgren-Miner |
 | BS 7910 / API 579 | Residual stress through-thickness profiles (Level 1 and 2) |
-| AWS D1.1 | Weld joint efficiency factors, filler metal matching |
+| AWS D1.1 | S-N categories A–E', weld joint efficiency factors, filler metal matching |
 | Lazzarin (2001) | Strain energy density method with control volume |
 
 ## Project Metrics
 
-- 86 source modules, ~22,900 lines of code
-- 600+ passing tests across 28 test modules
+- 87 source modules, ~26,000 lines of code
+- 1,089 tests across 38 test modules
 - 49 material databases (7 categories) with temperature-dependent properties
 - 6 JSON reference datasets (SCF, CCT, S-N details, residual stress, filler metals, weld efficiency)
 - 5 joint geometry types, 2 solver backends, 6 solver types, 8 post-processing methods
-- 24 documentation figures, 10 user guides, and a full mermaid-diagrammed architecture reference
+- 30 documentation figures, 11 user guides, and a full mermaid-diagrammed architecture reference

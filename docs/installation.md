@@ -90,7 +90,7 @@ Aggregates `fenics`, `calculix`, `viz`, `ml`, and `digital-twin`. Large install;
 ```bash
 feaweld --version
 feaweld materials              # prints the bundled material database
-pytest tests/ -x               # 332+ tests; some require optional extras
+pytest tests/ -x               # 1,080+ tests; some require optional extras
 ```
 
 Tests requiring optional backends are marked:

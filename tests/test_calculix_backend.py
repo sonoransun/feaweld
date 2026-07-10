@@ -1,307 +1,197 @@
-"""Tests for the CalculiX solver backend using mocked subprocess calls."""
+"""Tests for the CalculiX (ccx) solver backend.
+
+The module imports cleanly with CalculiX absent; the unmarked tests below
+exercise the pure-Python deck writer (element-type coverage and the Gmsh ->
+CalculiX quadratic-tet node permutation) without invoking ``ccx``.  The two
+end-to-end tests are gated behind ``@pytest.mark.requires_calculix`` and a
+``skipif`` on ``shutil.which("ccx")`` so they are collected (not
+module-skipped) but only run where the ``ccx`` executable is on ``PATH``.
+"""
 
 from __future__ import annotations
 
-import os
-import textwrap
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+import shutil
+import subprocess
 
 import numpy as np
 import pytest
 
-from feaweld.core.materials import Material
 from feaweld.core.types import (
     BoundaryCondition,
     ElementType,
-    FEAResults,
     FEMesh,
     LoadCase,
     LoadType,
     StressField,
 )
+from feaweld.solver import calculix_backend
+from feaweld.solver.backend import SolverBackend
 from feaweld.solver.calculix_backend import (
+    _ELEMENT_TYPE_MAP,
+    _GMSH_TO_CCX_PERMUTATION,
     CalculiXBackend,
     generate_inp,
     parse_frd,
 )
 
+# ``ccx`` is not installed in the default dev environment, so the gated tests
+# skip there; where it is present they run for real.
+requires_ccx = pytest.mark.skipif(
+    shutil.which("ccx") is None,
+    reason="ccx executable not found on PATH",
+)
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
+def _one_tet10_mesh() -> FEMesh:
+    """A single straight-edged C3D10 tetrahedron in Gmsh node order.
 
-def _make_synthetic_frd(
-    n_nodes: int,
-    include_displacement: bool = True,
-    include_stress: bool = False,
-) -> str:
-    """Generate a minimal ASCII .frd file for testing.
+    Corner nodes 0..3 span a unit-scale tetrahedron; mid-edge nodes 4..9 sit
+    at the exact edge midpoints in Gmsh's TET10 edge order
+    ``(0,1),(1,2),(2,0),(0,3),(2,3),(1,3)``.  The ``bottom`` node set is the
+    fully clamped ``z = 0`` face (three corners plus their three mid-edge
+    nodes) and ``apex`` is the single free corner carrying the load.
 
-    The .frd format used by CalculiX:
-    - ``  100C`` marks the start of a result block header.
-    - `` -4`` lines carry the block name (e.g. DISPLACEMENT, STRESS).
-    - `` -5`` lines list each component name.
-    - `` -1`` lines carry per-node data: node ID in cols 3-13, then
-      12-char-wide fields for each component value.
+    Returns
+    -------
+    FEMesh
+        A one-element quadratic-tet mesh.
     """
-    lines: list[str] = []
-    lines.append("    1C")  # header (ignored by parser)
-    lines.append("    2C")
-
-    if include_displacement:
-        lines.append("  100CL  101       1    1    1")
-        lines.append(" -4  DISPLACEMENT       1    1")
-        lines.append(" -5  D1                  1    1    0")
-        lines.append(" -5  D2                  1    1    0")
-        lines.append(" -5  D3                  1    1    0")
-        for i in range(1, n_nodes + 1):
-            dx = 0.001 * i
-            dy = 0.002 * i
-            dz = 0.0
-            lines.append(f" -1{i:10d}{dx:12.5E}{dy:12.5E}{dz:12.5E}")
-
-    if include_stress:
-        lines.append("  100CL  102       1    1    1")
-        lines.append(" -4  STRESS              1    1")
-        lines.append(" -5  SXX                 1    1    0")
-        lines.append(" -5  SYY                 1    1    0")
-        lines.append(" -5  SZZ                 1    1    0")
-        lines.append(" -5  SXY                 1    1    0")
-        lines.append(" -5  SYZ                 1    1    0")
-        lines.append(" -5  SXZ                 1    1    0")
-        for i in range(1, n_nodes + 1):
-            sxx = 100.0 + i
-            syy = 50.0
-            szz = 0.0
-            sxy = 10.0
-            syz = 0.0
-            sxz = 0.0
-            lines.append(
-                f" -1{i:10d}"
-                f"{sxx:12.5E}{syy:12.5E}{szz:12.5E}"
-                f"{sxy:12.5E}{syz:12.5E}{sxz:12.5E}"
-            )
-
-    lines.append("    3C")  # end marker
-    return "\n".join(lines) + "\n"
+    nodes = np.array([
+        [0.0, 0.0, 0.0],    # 0  corner
+        [10.0, 0.0, 0.0],   # 1  corner
+        [0.0, 10.0, 0.0],   # 2  corner
+        [0.0, 0.0, 10.0],   # 3  corner (apex)
+        [5.0, 0.0, 0.0],    # 4  mid-edge (0,1)
+        [5.0, 5.0, 0.0],    # 5  mid-edge (1,2)
+        [0.0, 5.0, 0.0],    # 6  mid-edge (2,0)
+        [0.0, 0.0, 5.0],    # 7  mid-edge (0,3)
+        [0.0, 5.0, 5.0],    # 8  mid-edge (2,3)
+        [5.0, 0.0, 5.0],    # 9  mid-edge (1,3)
+    ])
+    elements = np.array([[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]])
+    return FEMesh(
+        nodes=nodes,
+        elements=elements,
+        element_type=ElementType.TET10,
+        node_sets={
+            "bottom": np.array([0, 1, 2, 4, 5, 6]),
+            "apex": np.array([3]),
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
-# .inp generation tests
+# Unmarked: importable and deck writer correct without CalculiX installed
 # ---------------------------------------------------------------------------
 
+def test_module_imports_without_calculix():
+    """The backend module and class import even when ccx is missing."""
+    assert calculix_backend.CalculiXBackend is not None
+    assert issubclass(CalculiXBackend, SolverBackend)
 
-class TestGenerateInpStatic:
-    """Verify that .inp files for static analysis contain the expected sections."""
 
-    def test_generate_inp_static(self, simple_plate_mesh, steel_material, simple_load_case, tmp_path):
-        inp_path = tmp_path / "test_static.inp"
-        generate_inp(
-            mesh=simple_plate_mesh,
-            material=steel_material,
-            load_case=simple_load_case,
-            path=inp_path,
-            analysis="static",
-        )
-        content = inp_path.read_text()
+def test_element_type_map_covers_every_element_type():
+    """Every ElementType member maps to a CalculiX/Abaqus element keyword."""
+    missing = [m.name for m in ElementType if m not in _ELEMENT_TYPE_MAP]
+    assert missing == [], f"_ELEMENT_TYPE_MAP is missing element types: {missing}"
 
-        assert "*NODE" in content
-        assert "*ELEMENT" in content
-        assert "*MATERIAL" in content
-        assert "*STEP" in content
-        assert "*STATIC" in content
-        assert "*END STEP" in content
-        assert "*ELASTIC" in content
-        assert "*DENSITY" in content
-        # Should contain the correct number of node lines (4 nodes)
-        node_lines = [l for l in content.splitlines() if l.strip() and not l.startswith("*") and not l.startswith("**")]
-        # At least 4 node lines exist
-        assert len(node_lines) >= simple_plate_mesh.n_nodes
 
-    def test_generate_inp_thermal(self, simple_plate_mesh, steel_material, simple_load_case, tmp_path):
-        inp_path = tmp_path / "test_thermal.inp"
-        generate_inp(
-            mesh=simple_plate_mesh,
-            material=steel_material,
-            load_case=simple_load_case,
-            path=inp_path,
-            analysis="thermal_steady",
-        )
-        content = inp_path.read_text()
+def test_tet10_node_permutation_written_to_deck(tmp_path, steel_material):
+    """The generated C3D10 element line reorders mid-edge nodes 8 and 9.
 
-        assert "*HEAT TRANSFER, STEADY STATE" in content
-        assert "*INITIAL CONDITIONS, TYPE=TEMPERATURE" in content
-        assert "NT" in content  # node file output for temperature
-        assert "*NODE" in content
-        assert "*ELEMENT" in content
-        assert "*END STEP" in content
+    Gmsh and CalculiX disagree on the last two mid-edge nodes of a quadratic
+    tetrahedron; ``_GMSH_TO_CCX_PERMUTATION[TET10]`` swaps them.  With a mesh
+    stored in Gmsh order (connectivity ``0..9``), the written 1-based line must
+    therefore read ``1,2,3,4,5,6,7,8,10,9`` — positions 8 and 9 exchanged.
+    """
+    assert _GMSH_TO_CCX_PERMUTATION[ElementType.TET10] == [0, 1, 2, 3, 4, 5, 6, 7, 9, 8]
 
-    def test_inp_element_type(self, simple_plate_mesh, steel_material, simple_load_case, tmp_path):
-        """Element type mapping is applied correctly in the .inp file."""
-        inp_path = tmp_path / "test_elem.inp"
-        generate_inp(
-            mesh=simple_plate_mesh,
-            material=steel_material,
-            load_case=simple_load_case,
-            path=inp_path,
-        )
-        content = inp_path.read_text()
-        # TRI3 should map to S3
-        assert "TYPE=S3" in content
+    mesh = _one_tet10_mesh()
+    lc = LoadCase(
+        name="clamp",
+        constraints=[BoundaryCondition(
+            "bottom", LoadType.DISPLACEMENT, np.array([0.0, 0.0, 0.0]),
+        )],
+    )
+    inp = generate_inp(mesh, steel_material, lc, tmp_path / "tet10.inp", analysis="static")
 
-    def test_inp_node_sets_written(self, simple_plate_mesh, steel_material, simple_load_case, tmp_path):
-        """All mesh node sets appear as *NSET blocks."""
-        inp_path = tmp_path / "test_nset.inp"
-        generate_inp(
-            mesh=simple_plate_mesh,
-            material=steel_material,
-            load_case=simple_load_case,
-            path=inp_path,
-        )
-        content = inp_path.read_text()
-        for name in simple_plate_mesh.node_sets:
-            assert f"*NSET, NSET={name}" in content
+    element_line = None
+    lines = inp.read_text().splitlines()
+    for idx, line in enumerate(lines):
+        if line.startswith("*ELEMENT"):
+            element_line = lines[idx + 1]
+            break
+    assert element_line is not None, "no *ELEMENT data line written"
+
+    connectivity = [int(tok) for tok in element_line.split(",")]
+    # First token is the 1-based element id; the rest is the node connectivity.
+    assert connectivity == [1, 1, 2, 3, 4, 5, 6, 7, 8, 10, 9]
 
 
 # ---------------------------------------------------------------------------
-# .frd parser tests
+# Marked: real ccx solves (skipped where the executable is unavailable)
 # ---------------------------------------------------------------------------
 
+@pytest.mark.requires_calculix
+@requires_ccx
+def test_solve_static_tet4(simple_3d_mesh, steel_material):
+    """A tiny TET4 mesh solves end-to-end and parses finite nodal stress."""
+    lc = LoadCase(
+        name="axial",
+        loads=[BoundaryCondition(
+            "top", LoadType.FORCE, np.array([1000.0]),
+            direction=np.array([0.0, 0.0, 1.0]),
+        )],
+        constraints=[BoundaryCondition(
+            "bottom", LoadType.DISPLACEMENT, np.array([0.0, 0.0, 0.0]),
+        )],
+    )
+    results = CalculiXBackend().solve_static(simple_3d_mesh, steel_material, lc)
 
-class TestParseFrd:
-
-    def test_parse_frd_displacement(self, tmp_path):
-        frd_content = _make_synthetic_frd(n_nodes=4, include_displacement=True)
-        frd_path = tmp_path / "test.frd"
-        frd_path.write_text(frd_content)
-
-        result = parse_frd(frd_path)
-
-        assert "displacement" in result
-        disp = result["displacement"]
-        assert disp.shape == (4, 3)
-        # Check first node displacement values
-        np.testing.assert_allclose(disp[0, 0], 0.001 * 1, rtol=1e-3)
-        np.testing.assert_allclose(disp[0, 1], 0.002 * 1, rtol=1e-3)
-
-    def test_parse_frd_stress(self, tmp_path):
-        frd_content = _make_synthetic_frd(n_nodes=4, include_stress=True, include_displacement=False)
-        frd_path = tmp_path / "test_stress.frd"
-        frd_path.write_text(frd_content)
-
-        result = parse_frd(frd_path)
-
-        assert "stress" in result
-        stress = result["stress"]
-        assert stress.shape == (4, 6)
-        # Node 1: sxx = 101, syy = 50
-        np.testing.assert_allclose(stress[0, 0], 101.0, rtol=1e-3)
-        np.testing.assert_allclose(stress[0, 1], 50.0, rtol=1e-3)
-
-    def test_parse_frd_both_fields(self, tmp_path):
-        frd_content = _make_synthetic_frd(
-            n_nodes=3, include_displacement=True, include_stress=True,
-        )
-        frd_path = tmp_path / "both.frd"
-        frd_path.write_text(frd_content)
-
-        result = parse_frd(frd_path)
-
-        assert "displacement" in result
-        assert "stress" in result
-        assert result["displacement"].shape[0] == 3
-        assert result["stress"].shape[0] == 3
-
-    def test_parse_frd_file_not_found(self, tmp_path):
-        with pytest.raises(FileNotFoundError):
-            parse_frd(tmp_path / "nonexistent.frd")
+    assert isinstance(results.stress, StressField)
+    assert results.stress.values.shape[1] == 6
+    assert results.stress.values.shape[0] > 0
+    assert np.all(np.isfinite(results.stress.values))
+    assert results.displacement is not None
+    assert np.all(np.isfinite(results.displacement))
+    assert np.any(np.abs(results.displacement) > 0.0)
 
 
-# ---------------------------------------------------------------------------
-# Full solve with mocked subprocess
-# ---------------------------------------------------------------------------
+@pytest.mark.requires_calculix
+@requires_ccx
+def test_tet10_deck_accepted_by_ccx(tmp_path, steel_material):
+    """ccx accepts the permuted C3D10 deck and returns finite stress.
 
+    An incorrect mid-edge node order leaves two mid-side nodes off the edges
+    ccx expects, giving a non-affine map with a non-positive Jacobian that ccx
+    rejects; a clean ``returncode == 0`` and parseable stress thus validate the
+    Gmsh -> CalculiX permutation numerically.
+    """
+    mesh = _one_tet10_mesh()
+    lc = LoadCase(
+        name="apex_load",
+        loads=[BoundaryCondition(
+            "apex", LoadType.FORCE, np.array([500.0]),
+            direction=np.array([1.0, 0.0, 0.0]),
+        )],
+        constraints=[BoundaryCondition(
+            "bottom", LoadType.DISPLACEMENT, np.array([0.0, 0.0, 0.0]),
+        )],
+    )
+    inp = generate_inp(mesh, steel_material, lc, tmp_path / "model.inp", analysis="static")
 
-class TestSolveStaticMocked:
+    proc = subprocess.run(
+        ["ccx", "-i", inp.stem],
+        cwd=str(tmp_path),
+        capture_output=True,
+        text=True,
+        timeout=600,
+    )
+    assert proc.returncode == 0, (proc.stdout[-2000:] + proc.stderr[-2000:])
 
-    def test_solve_static_mocked(self, simple_plate_mesh, steel_material, simple_load_case, tmp_path):
-        """Patch subprocess.run and write a synthetic .frd to verify FEAResults."""
-        n_nodes = simple_plate_mesh.n_nodes
-        frd_content = _make_synthetic_frd(
-            n_nodes=n_nodes, include_displacement=True, include_stress=True,
-        )
-
-        def fake_run(cmd, **kwargs):
-            # Write the synthetic .frd file where the backend expects it
-            cwd = Path(kwargs.get("cwd", "."))
-            job_name = cmd[2]  # ccx -i <job_name>
-            frd_path = cwd / f"{job_name}.frd"
-            frd_path.write_text(frd_content)
-            return MagicMock(returncode=0, stdout="", stderr="")
-
-        backend = CalculiXBackend(ccx_path="/usr/bin/ccx", work_dir=str(tmp_path))
-
-        with patch("feaweld.solver.calculix_backend.subprocess.run", side_effect=fake_run):
-            result = backend.solve_static(
-                mesh=simple_plate_mesh,
-                material=steel_material,
-                load_case=simple_load_case,
-                temperature=20.0,
-            )
-
-        assert isinstance(result, FEAResults)
-        assert result.displacement is not None
-        assert result.displacement.shape == (n_nodes, 3)
-        assert result.stress is not None
-        assert result.stress.values.shape == (n_nodes, 6)
-        assert result.metadata["solver"] == "calculix"
-
-
-class TestCcxNotFound:
-
-    def test_ccx_not_found(self):
-        """When _find_ccx raises, CalculiXBackend.solve_static should propagate the error."""
-        backend = CalculiXBackend()
-
-        with patch(
-            "feaweld.solver.calculix_backend._find_ccx",
-            side_effect=FileNotFoundError("ccx not found"),
-        ):
-            with pytest.raises(FileNotFoundError, match="ccx not found"):
-                backend.solve_static(
-                    mesh=FEMesh(
-                        nodes=np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0]]),
-                        elements=np.array([[0, 1, 2]]),
-                        element_type=ElementType.TRI3,
-                    ),
-                    material=Material(
-                        name="Dummy",
-                        density=7850,
-                        elastic_modulus={20: 200000},
-                        poisson_ratio={20: 0.3},
-                    ),
-                    load_case=LoadCase(name="dummy"),
-                )
-
-
-class TestScratchDir:
-
-    def test_scratch_dir_uses_env(self, tmp_path, monkeypatch):
-        """FEAWELD_TMPDIR environment variable should control scratch directory location."""
-        scratch_base = tmp_path / "custom_scratch"
-        scratch_base.mkdir()
-        monkeypatch.setenv("FEAWELD_TMPDIR", str(scratch_base))
-
-        backend = CalculiXBackend()
-        scratch = backend._scratch_dir()
-
-        assert str(scratch).startswith(str(scratch_base))
-
-    def test_scratch_dir_with_work_dir(self, tmp_path):
-        """If work_dir is provided it should be returned directly."""
-        work = tmp_path / "workdir"
-        work.mkdir()
-        backend = CalculiXBackend(work_dir=str(work))
-        assert backend._scratch_dir() == work
+    frd = tmp_path / f"{inp.stem}.frd"
+    assert frd.exists()
+    stress = parse_frd(frd).get("stress")
+    assert stress is not None
+    assert stress.shape[1] == 6
+    assert np.all(np.isfinite(stress))

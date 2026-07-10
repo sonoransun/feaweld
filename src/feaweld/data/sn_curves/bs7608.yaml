@@ -1,0 +1,23 @@
+# BS 7608 basic weld quality classes (direct stress, S in N/mm^2).
+# Classic Table constants shared by the 1993 edition and the basic classes
+# of BS 7608:2014+A1:
+#   log10(N) = log10(a) - m * log10(S)
+# The design curve is mean minus two standard deviations of log10(N):
+#   log_a_design = log_a_mean - 2 * sd
+# Haibach extension below the knee at 1e7 cycles (slope m + 2, intercept
+# anchored by continuity at the knee); cut-off at 1e8 cycles.
+
+conventions:
+  knee_cycles: 1.0e+7
+  cutoff_cycles: 1.0e+8
+  design_sd_multiplier: 2
+
+classes:
+  B:  {m: 4.0, log_a_mean: 15.3697, sd: 0.1821}
+  C:  {m: 3.5, log_a_mean: 14.0342, sd: 0.2041}
+  D:  {m: 3.0, log_a_mean: 12.6007, sd: 0.2095}
+  E:  {m: 3.0, log_a_mean: 12.5169, sd: 0.2509}
+  F:  {m: 3.0, log_a_mean: 12.2370, sd: 0.2183}
+  F2: {m: 3.0, log_a_mean: 12.0900, sd: 0.2279}
+  G:  {m: 3.0, log_a_mean: 11.7525, sd: 0.1793}
+  W1: {m: 3.0, log_a_mean: 11.5662, sd: 0.1846}

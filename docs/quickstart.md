@@ -113,6 +113,35 @@ A ready-made copy ships as `examples/leg_sweep_study.yaml` — run it directly w
 `feaweld study run examples/leg_sweep_study.yaml -j 4`. A comparison report is
 emitted with delta tables and sensitivity plots.
 
+!!! tip "Spectrum fatigue"
+    A top-level `fatigue:` block upgrades the one-shot S-N check to a full
+    spectrum assessment — rainflow counting, Miner damage, mean-stress
+    correction, and residual stress. Try the shipped variable-amplitude case:
+
+    ```bash
+    feaweld run examples/spectrum_fatigue.yaml
+    ```
+
+    or assess a stress history with no FEA at all:
+
+    ```bash
+    feaweld fatigue --history examples/load_history.csv -c EC3_90
+    ```
+
+    See the [Fatigue assessment guide](guides/fatigue_assessment.md).
+
+!!! tip "Go 3D"
+    Setting `geometry.dimension: 3` extrudes any joint into a solid — `length`
+    becomes the real weld length, and the hot-spot method runs per station
+    along each weld-toe line. Try the shipped extruded T-joint (note its
+    deliberately coarser mesh sizes):
+
+    ```bash
+    feaweld run examples/fillet_t_joint_3d.yaml
+    ```
+
+    See the [3D analysis guide](guides/analysis_3d.md).
+
 ## Next steps
 
 - [YAML analysis tutorial](tutorials/01_yaml_analysis.md) — deeper dive into case options.

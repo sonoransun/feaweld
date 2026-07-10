@@ -8,6 +8,7 @@ options take `--flag value` (or the short `-x value` where shown).
 |---------|---------|-------|
 | [`run`](#run) | Full analysis from a YAML case | [YAML analysis](../tutorials/01_yaml_analysis.md) |
 | [`blodgett`](#blodgett) | Weld-group hand calculations | [Custom post-processing](../tutorials/03_custom_postprocessing.md) |
+| [`fatigue`](#fatigue) | Standalone spectrum fatigue assessment | [Fatigue assessment](../guides/fatigue_assessment.md) |
 | [`visualize`](#visualize) | Render an FEA result file | [Visualization](../guides/visualization.md) |
 | [`goldak`](#goldak) | Render a Goldak heat source | [Solvers](../guides/solvers.md) |
 | [`dashboard`](#dashboard) | Engineering dashboard PNG | [Visualization](../guides/visualization.md) |
@@ -57,6 +58,50 @@ feaweld blodgett -g box --d 100 --b 50 -t 5 -P 10000
 | `-M/--moment` | `0.0` | Bending moment (N·mm) |
 | `-T/--torsion` | `0.0` | Torsion (N·mm) |
 | `--fexx` | `483.0` | Electrode strength F_EXX (MPa) |
+
+## `fatigue`
+
+Standalone spectrum fatigue assessment — no FEA required. Assesses either a
+constant-amplitude cycle (`--stress-range`, with an optional `--r-ratio` mean) or
+a rainflow-counted stress history CSV (`--history`) against an S-N curve, with
+optional mean-stress correction and thickness / surface / environment knockdowns.
+
+```bash
+feaweld fatigue --stress-range 120 -n 2e6 -c EC3_90
+```
+
+```
+S-N curve: EC3 detail category 90 (EC3_90)
+
+Constant-amplitude loading:
+  stress range = 120.00 MPa
+  mean stress  = 0.00 MPa
+  cycles       = 2e+06
+
+Assessment:
+  equivalent stress range = 120.00 MPa
+  damage                  = 2.3704e+00
+  life                    = 8.438e+05 cycles
+```
+
+| Option | Default | Meaning |
+|--------|---------|---------|
+| `-c/--curve` | `IIW_FAT90` | S-N curve spec, e.g. `IIW_FAT90`, `EC3_90`, `BS7608_D`, `AWS_C` |
+| `--history` | none | CSV file of a stress history (MPa) to rainflow-count |
+| `--column` | `0` | Column of the history CSV to use (0-based) |
+| `--stress-range` | none | Constant-amplitude stress range (MPa) |
+| `-n/--cycles` | none | Applied cycle count (enables the damage line) |
+| `--r-ratio` | none | Stress ratio R = σ_min/σ_max; sets the mean stress of the `--stress-range` cycle |
+| `--mean-correction` | `none` | `none`, `goodman`, `gerber` |
+| `--sigma-u` | none | Ultimate tensile strength (MPa); required for `--mean-correction` and `--roughness` |
+| `-t/--thickness` | none | Plate thickness (mm) for the IIW thickness correction |
+| `--roughness` | none | Surface roughness Ra (µm) for the Marin surface factor |
+| `--environment` | `air` | `air`, `corrosive`, `seawater` knockdown |
+| `--residual-profile` | none | Bundled residual stress profile; its surface value becomes the residual mean stress |
+| `--sigma-y` | none | Yield strength (MPa); required with `--residual-profile` |
+| `--list-curves` | off | List available S-N curve specs and exit |
+
+Exactly one of `--history` or `--stress-range` must be given.
 
 ## `visualize`
 

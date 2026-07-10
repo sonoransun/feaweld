@@ -74,6 +74,39 @@ def size_factor(diameter_mm: float) -> float:
     return 1.51 * 254.0 ** (-0.157) * (254.0 / d) ** 0.1
 
 
+def thickness_correction(
+    thickness: float,
+    reference_thickness: float = 25.0,
+    exponent: float = 0.3,
+) -> float:
+    """IIW plate-thickness correction factor f(t).
+
+    For plates thicker than the reference:
+        f(t) = (reference_thickness / thickness)^exponent
+    Thinner plates take no benefit (f = 1).  The factor multiplies the
+    fatigue strength (FAT class), i.e. it is a strength reduction.
+
+    Parameters
+    ----------
+    thickness : float
+        Plate thickness at the assessed detail (mm).
+    reference_thickness : float
+        Reference thickness below which no correction applies (mm);
+        25 mm per IIW recommendations.
+    exponent : float
+        Thickness exponent n (0.1-0.3 depending on detail; 0.3 is the
+        conservative default for as-welded joints).
+
+    Returns
+    -------
+    float
+        Thickness correction factor f(t) (0 < f <= 1).
+    """
+    if thickness <= reference_thickness:
+        return 1.0
+    return (reference_thickness / thickness) ** exponent
+
+
 def goodman_correction(
     stress_amp: float,
     mean_stress: float,

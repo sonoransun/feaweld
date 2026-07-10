@@ -32,7 +32,7 @@ from feaweld.visualization.plots_2d import plot_through_thickness
 fig = plot_through_thickness(linearization_result, show=False)
 ```
 
-<img src="images/example_through_thickness.svg" alt="Through-thickness" width="80%">
+![Through-thickness](../images/example_through_thickness.svg){ width="80%" }
 
 Features: Reference lines at membrane/MB scalar values, decomposition equation box, inner/outer surface labels.
 
@@ -45,7 +45,7 @@ from feaweld.visualization.plots_2d import plot_hotspot_extrapolation
 fig = plot_hotspot_extrapolation(hotspot_result, show=False)
 ```
 
-<img src="images/example_hotspot.svg" alt="Hot-spot extrapolation" width="80%">
+![Hot-spot extrapolation](../images/example_hotspot.svg){ width="80%" }
 
 Features: Schematic weld toe profile, horizontal hot-spot reference line, IIW type annotation (Type A/B).
 
@@ -58,7 +58,7 @@ from feaweld.visualization.plots_2d import plot_dong_decomposition
 fig = plot_dong_decomposition(dong_result, show=False)
 ```
 
-<img src="images/example_dong.svg" alt="Dong decomposition" width="80%">
+![Dong decomposition](../images/example_dong.svg){ width="80%" }
 
 Features: Dual-axis (stress + bending ratio), formula box with structural stress equation.
 
@@ -71,7 +71,7 @@ from feaweld.visualization.plots_2d import plot_sn_curve
 fig = plot_sn_curve(curve, stress_range=120.0, show=False)
 ```
 
-<img src="images/example_sn_curve.svg" alt="S-N curve" width="80%">
+![S-N curve](../images/example_sn_curve.svg){ width="80%" }
 
 Features: LCF/HCF/endurance regime bands, CAFL vertical line, knee point markers, standard name badge.
 
@@ -95,7 +95,7 @@ from feaweld.visualization.plots_2d import plot_weld_group_geometry
 fig = plot_weld_group_geometry(WeldGroupShape.BOX, d=100, b=60, props=props, show=False)
 ```
 
-<img src="images/weld_groups_gallery.svg" alt="Weld group shapes" width="90%">
+![Weld group shapes](../images/weld_groups_gallery.svg){ width="90%" }
 
 Supports 9 shapes: LINE, PARALLEL, C_SHAPE, L_SHAPE, BOX, CIRCULAR, I_SHAPE, T_SHAPE, U_SHAPE. Features: Dimension arrows, centroid with coordinates, section properties box.
 
@@ -108,7 +108,7 @@ from feaweld.visualization.plots_2d import plot_asme_check
 fig = plot_asme_check(categorization, S_m=160, S_y=275, show=False)
 ```
 
-<img src="images/example_asme_check.svg" alt="ASME check" width="70%">
+![ASME check](../images/example_asme_check.svg){ width="70%" }
 
 Features: Gradient utilization coloring (green-yellow-red), PASS/FAIL badges, limit equations next to each bar.
 
@@ -141,6 +141,13 @@ counterpart to `plot_stress_field` and is what the report's
 `stress_contour_2d` figure uses for planar sections.
 
 ## 3D Plots (PyVista)
+
+These functions were always 3-D renderers — historically fed the quasi-2D
+sections feaweld generated. With `geometry.dimension: 3` (see the
+[3D analysis guide](analysis_3d.md)) they now apply to real extruded-joint
+results: every plot function accepts the 3-D `FEMesh` unchanged, and
+`plot_stress_with_clipping` / `plot_iso_surface` become genuinely useful for
+looking inside the solid.
 
 All 3D functions return a `pyvista.Plotter` and share:
 
@@ -358,6 +365,9 @@ full registry, in order:
 | `asme_check` | ASME VIII Div 2 Stress Check | a `nominal` categorization present |
 | `weld_group` | Weld Group Geometry | a `blodgett` result present |
 | `rainflow` | Rainflow Cycle Histogram | rainflow cycles present |
+| `rainflow_matrix` | Rainflow Range-Mean Matrix | at least 4 rainflow cycles present |
+| `damage_per_block` | Damage by Stress-Range Bin | rainflow cycles present and the case S-N curve resolvable |
+| `haigh_diagram` | Haigh Mean-Stress Diagram | rainflow cycles, a mean-stress correction, and a resolvable base-metal ultimate strength |
 | `fatigue_life_map` | Fatigue Life Map | stress + mesh and `fatigue_assessment` on |
 | `damage_map` | Miner Damage Map | stress + mesh and rainflow cycles present |
 | `mc_histogram` | Monte Carlo Response Distribution | probabilistic results carry a sample array |

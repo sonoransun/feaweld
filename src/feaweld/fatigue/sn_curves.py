@@ -1,4 +1,5 @@
-"""S-N curve database for IIW, DNV-RP-C203, and ASME VIII Div 2 standards.
+"""S-N curve database for IIW, DNV-RP-C203, ASME VIII Div 2, EN 1993-1-9
+(Eurocode 3), BS 7608, and AWS D1.1 standards.
 
 Each curve is returned as an [SNCurve][feaweld.core.types.SNCurve] comprising
 one or more [SNSegment][feaweld.core.types.SNSegment] entries.
@@ -217,6 +218,208 @@ def asme_curve(material: str) -> SNCurve:
 
 
 # ---------------------------------------------------------------------------
+# EN 1993-1-9 (Eurocode 3)
+# ---------------------------------------------------------------------------
+
+
+def ec3_curve(category: int) -> SNCurve:
+    """Return EN 1993-1-9 (Eurocode 3) direct stress S-N curve.
+
+    EC3 formulation (two-slope with constant-amplitude fatigue limit):
+
+    - Segment 1 (m = 3): anchored at $N = 2 \\times 10^6$ where the stress
+      range equals the detail category $\\Delta\\sigma_C$, valid down to
+      the constant-amplitude fatigue limit at $N_D = 5 \\times 10^6$:
+      $\\Delta\\sigma_D = (2/5)^{1/3} \\Delta\\sigma_C \\approx
+      0.7368 \\Delta\\sigma_C$.
+    - Segment 2 (m = 5): between $N_D$ and the cut-off at $N_L = 10^8$:
+      $\\Delta\\sigma_L = (5/100)^{1/5} \\Delta\\sigma_D \\approx
+      0.4047 \\Delta\\sigma_C$.
+
+    Parameters
+    ----------
+    category : int
+        Detail category (e.g. 90), the stress range in MPa giving a
+        life of 2e6 cycles.
+
+    Returns
+    -------
+    SNCurve
+    """
+    from feaweld.data.cache import get_cache
+
+    data = get_cache().get("sn_curves/ec3")
+    categories = data["categories"]
+    if category not in categories:
+        raise ValueError(
+            f"Unsupported EC3 detail category: {category}. "
+            f"Choose from {tuple(categories)}"
+        )
+
+    conv = data["conventions"]
+    n_ref = float(conv["n_reference"])
+    n_knee = float(conv["knee_cycles"])
+    n_cutoff = float(conv["cutoff_cycles"])
+    m1 = float(conv["m1"])
+    m2 = float(conv["m2"])
+
+    delta_sigma_c = float(category)
+    C1 = delta_sigma_c ** m1 * n_ref
+
+    # Constant-amplitude fatigue limit at N_D
+    S_D = delta_sigma_c * (n_ref / n_knee) ** (1.0 / m1)
+
+    # Continuity at the knee: C2 / S_D^m2 = N_D  =>  C2 = S_D^m2 * N_D
+    C2 = S_D ** m2 * n_knee
+
+    # Cut-off (variable-amplitude) limit at N_L
+    S_L = (C2 / n_cutoff) ** (1.0 / m2)
+
+    segments = [
+        SNSegment(m=m1, C=C1, stress_threshold=S_D),
+        SNSegment(m=m2, C=C2, stress_threshold=S_L),
+    ]
+
+    return SNCurve(
+        name=f"EC3 detail category {category}",
+        standard=SNStandard.EC3,
+        segments=segments,
+        cutoff_cycles=n_cutoff,
+    )
+
+
+# ---------------------------------------------------------------------------
+# BS 7608
+# ---------------------------------------------------------------------------
+
+
+def bs7608_curve(class_name: str, *, mean_curve: bool = False) -> SNCurve:
+    """Return BS 7608 S-N curve for the given weld quality class.
+
+    BS 7608 formulation:
+        log10(N) = log10(a) - m * log10(S)
+    with the design curve at mean minus two standard deviations of
+    log10(N).  A Haibach extension (slope m + 2, anchored by continuity)
+    applies below the knee at N = 1e7; cut-off at N = 1e8.
+
+    Parameters
+    ----------
+    class_name : str
+        Weld quality class: B, C, D, E, F, F2, G, or W1
+        (case-insensitive).
+    mean_curve : bool
+        If True, return the mean curve instead of the design
+        (mean - 2 SD) curve.
+
+    Returns
+    -------
+    SNCurve
+    """
+    from feaweld.data.cache import get_cache
+
+    data = get_cache().get("sn_curves/bs7608")
+    classes = data["classes"]
+    cls = class_name.strip().upper()
+    if cls not in classes:
+        raise ValueError(
+            f"Unknown BS 7608 class '{class_name}'. "
+            f"Choose from {sorted(classes.keys())}"
+        )
+
+    entry = classes[cls]
+    conv = data["conventions"]
+    m1 = float(entry["m"])
+    log_a = float(entry["log_a_mean"])
+    if not mean_curve:
+        log_a -= float(conv["design_sd_multiplier"]) * float(entry["sd"])
+
+    n_knee = float(conv["knee_cycles"])
+    n_cutoff = float(conv["cutoff_cycles"])
+
+    C1 = 10.0 ** log_a
+
+    # Knee point stress at N = 1e7 using segment 1
+    S_knee = (C1 / n_knee) ** (1.0 / m1)
+
+    # Haibach extension: slope m + 2, continuity at the knee
+    m2 = m1 + 2.0
+    C2 = S_knee ** m2 * n_knee
+
+    # Cut-off at N = 1e8
+    S_cutoff = (C2 / n_cutoff) ** (1.0 / m2)
+
+    segments = [
+        SNSegment(m=m1, C=C1, stress_threshold=S_knee),
+        SNSegment(m=m2, C=C2, stress_threshold=S_cutoff),
+    ]
+
+    name = f"BS 7608 class {cls}"
+    if mean_curve:
+        name += " (mean)"
+
+    return SNCurve(
+        name=name,
+        standard=SNStandard.BS7608,
+        segments=segments,
+        cutoff_cycles=n_cutoff,
+    )
+
+
+# ---------------------------------------------------------------------------
+# AWS D1.1 / AISC
+# ---------------------------------------------------------------------------
+
+
+def aws_curve(category: str) -> SNCurve:
+    """Return AWS D1.1 / AISC S-N curve for the given stress category.
+
+    Single-slope (m = 3) curves with a constant-amplitude fatigue
+    threshold F_TH per category, below which life is infinite.  The
+    published SI form of the AISC/AWS equation is:
+        F_SR(MPa) = (Cf * 329e8 / N)^(1/3)
+    which gives C = Cf * 3.29e10 in the N * S^m = C convention.
+
+    Parameters
+    ----------
+    category : str
+        Stress category: A, B, B', C, D, E, or E'.  The primed
+        categories are also accepted as ``"BP"`` / ``"EP"``
+        (case-insensitive).
+
+    Returns
+    -------
+    SNCurve
+    """
+    from feaweld.data.cache import get_cache
+
+    data = get_cache().get("sn_curves/aws")
+    categories = data["categories"]
+    cat = category.strip().upper().replace("'", "P")
+    if cat not in categories:
+        raise ValueError(
+            f"Unknown AWS category '{category}'. "
+            f"Choose from {sorted(categories.keys())}"
+        )
+
+    conv = data["conventions"]
+    m = float(conv["m"])
+    entry = categories[cat]
+    C = float(entry["Cf_ksi"]) * float(conv["si_factor"])
+    f_th = float(entry["f_th_mpa"])
+
+    segments = [SNSegment(m=m, C=C, stress_threshold=f_th)]
+
+    display = cat[:-1] + "'" if cat.endswith("P") else cat
+    return SNCurve(
+        name=f"AWS D1.1 category {display}",
+        standard=SNStandard.AWS,
+        segments=segments,
+        # Threshold cycle count: life at F_TH (infinite life below F_TH)
+        cutoff_cycles=C / f_th ** m,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Unified dispatcher
 # ---------------------------------------------------------------------------
 
@@ -227,12 +430,17 @@ def get_sn_curve(standard: str, name: str) -> SNCurve:
     Parameters
     ----------
     standard : str
-        One of ``"iiw"``, ``"dnv"``, ``"asme"`` (case-insensitive).
+        One of ``"iiw"``, ``"dnv"``, ``"asme"``, ``"ec3"`` (or
+        ``"eurocode3"``), ``"bs7608"`` (or ``"bs"``), ``"aws"``
+        (case-insensitive).
     name : str
         Curve identifier:
         - IIW: FAT class as string, e.g. ``"90"`` or ``"FAT90"``.
         - DNV: detail category, e.g. ``"D"``, ``"F1"``.
         - ASME: material, e.g. ``"ferritic"``.
+        - EC3: detail category, e.g. ``"90"``.
+        - BS 7608: weld class, e.g. ``"D"``, ``"F2"``.
+        - AWS: stress category, e.g. ``"C"``, ``"BP"``.
 
     Returns
     -------
@@ -247,14 +455,24 @@ def get_sn_curve(standard: str, name: str) -> SNCurve:
         return dnv_curve(name)
     if std == "asme":
         return asme_curve(name)
-    raise ValueError(f"Unknown standard '{standard}'. Choose from iiw, dnv, asme.")
+    if std in ("ec3", "eurocode3"):
+        return ec3_curve(int(name.strip()))
+    if std in ("bs7608", "bs"):
+        return bs7608_curve(name)
+    if std == "aws":
+        return aws_curve(name)
+    raise ValueError(
+        f"Unknown standard '{standard}'. "
+        "Choose from iiw, dnv, asme, ec3, bs7608, aws."
+    )
 
 
 def parse_sn_spec(spec: str) -> SNCurve:
     """Parse a combined S-N curve spec string like ``"IIW_FAT90"``.
 
     Accepts ``"<standard>_<name>"`` (e.g. ``"IIW_FAT90"``, ``"DNV_D"``,
-    ``"ASME_ferritic"``) or a bare IIW FAT class (``"FAT90"`` / ``"90"``).
+    ``"ASME_ferritic"``, ``"EC3_90"``, ``"BS7608_F2"``, ``"AWS_C"``) or a
+    bare IIW FAT class (``"FAT90"`` / ``"90"``).
 
     Parameters
     ----------

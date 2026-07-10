@@ -87,6 +87,25 @@ $\alpha \cdot \Delta T$, with $\alpha$ evaluated from the material at temperatur
     `thermomechanical` with a `thermal:` block (see the
     [Solvers guide](solvers.md)).
 
+## Cyclic and spectrum loading
+
+The `load:` block itself is static — cyclic loading is defined in the separate
+top-level `fatigue:` block (R-ratio, spectrum blocks, or a rainflow-counted load
+history) and assessed after the solve. The two blocks interact through one
+convention:
+
+!!! note "Load magnitudes are cycle maxima"
+    When a `fatigue:` block with a factor-space definition is present (`r_ratio`,
+    `range_factor` blocks, or a `load_factor` history), the `load:` magnitudes
+    are the **maxima of the load cycle**. The static solve at that maximum
+    provides the reference stress that the cyclic factors scale — a
+    `range_factor: 0.5` block means half the stress the solved load produces.
+
+All load components scale together with one global factor; independently-cycling
+components need the governing combination solved as the maximum. See the
+[Fatigue assessment guide](fatigue_assessment.md) for the full `fatigue:` block
+reference.
+
 ## Welding thermal boundary conditions
 
 When `thermal.enabled` is true the thermal solve uses a separate boundary set built
@@ -108,12 +127,16 @@ load:
 ```
 
 Both conditions are emitted on the `top` set: a uniform per-node tension plus the
-proportional bending couple. The nominal stress used by the notch-stress and
-probabilistic models combines them as
+proportional bending couple. The **probabilistic** response model combines them
+into a closed-form nominal stress
 
 $$\sigma_{nom} = \frac{|F|}{w\,t} + \frac{6\,|M|}{w\,t^2}$$
 
-with `w = geometry.base_width` and `t = geometry.base_thickness`.
+with `w = geometry.base_width` and `t = geometry.base_thickness`. The
+notch-stress method does *not* use this formula: its reference stress is
+`postprocess.notch_nominal_stress` when set, and otherwise the FEA
+through-thickness linearized structural stress (membrane + bending) at the
+weld toe.
 
 ## Programmatic loads
 
@@ -126,5 +149,7 @@ For loads beyond the five case fields, build a `LoadCase` directly from
 
 - [Solvers](solvers.md) — solver types and the thermal boundary setup.
 - [PWHT](pwht.md) — heat input and post-weld heat treatment.
+- [Fatigue assessment](fatigue_assessment.md) — cyclic loading, rainflow, and
+  spectrum damage on top of these loads.
 - [Probabilistic & reliability](probabilistic.md) — the closed-form nominal-stress
   response model built from these loads.

@@ -67,16 +67,17 @@ the middle of it.
 flowchart LR
     subgraph foundation["Foundation"]
         core["core<br/>types · materials · loads"]
-        data["data<br/>materials · S-N · CCT · SCF"]
+        data["data<br/>materials · S-N · CCT · SCF ·<br/>residual stress · weld efficiency"]
     end
 
-    geometry["geometry<br/>joints · notch"] --> mesh["mesh<br/>Gmsh generator"]
+    geometry["geometry<br/>joints 2D/3D · notch"] --> mesh["mesh<br/>Gmsh generator"]
     mesh --> solver["solver<br/>FEniCSx · CalculiX"]
     solver --> postprocess["postprocess<br/>8 stress methods"]
-    postprocess --> fatigue["fatigue<br/>S-N · rainflow · Miner"]
+    postprocess --> fatigue["fatigue<br/>S-N · rainflow · Miner · mean stress"]
     fatigue --> pipeline["pipeline<br/>workflow · study · report"]
 
     data -.->|provides| core
+    data -.->|"residual stress · weld efficiency"| pipeline
     core -.->|types| geometry
     core -.->|types| solver
     core -.->|types| postprocess
@@ -103,12 +104,12 @@ Package responsibilities:
 | Package | Responsibility |
 |---------|----------------|
 | `core` | Shared dataclasses (`types.py`), temperature-dependent material DB (`materials.py`), load and heat-input definitions (`loads.py`) |
-| `data` | Reference datasets (49 materials, S-N curves, CCT, SCF, residual stress, filler metals, weld efficiency) behind a registry singleton + LRU cache |
-| `geometry` | Five joint types via the Gmsh API; fictitious 1 mm notch insertion for effective-notch stress |
-| `mesh` | Gmsh mesh generation with weld-toe refinement, plus format conversion and quality metrics |
+| `data` | Reference datasets (49 materials, S-N curves, CCT, SCF, residual stress, filler metals, weld efficiency) behind a registry singleton + LRU cache; the residual-stress profiles feed the fatigue stage and the weld-efficiency table the nominal ASME checks |
+| `geometry` | Five joint types via the Gmsh API — 2D cross-sections or extruded 3D solids (`dimension: 3`) with per-toe edge groups; butt-weld groove parameters; fictitious 1 mm notch insertion for effective-notch stress (2D only) |
+| `mesh` | Gmsh mesh generation with weld-toe refinement (point-based in 2D, toe-line distance fields in 3D; 3D is tet-only), plus format conversion and quality metrics |
 | `solver` | `SolverBackend` ABC + auto-detect; J2 plasticity, Goldak thermal, Norton-Bailey creep, sequential thermomechanical coupling |
 | `postprocess` | Eight stress methods across seven modules, each consuming `FEAResults` |
-| `fatigue` | S-N curves (IIW / DNV / ASME), ASTM E1049 rainflow, Palmgren-Miner damage, knockdown corrections |
+| `fatigue` | Six S-N standards (IIW / DNV / ASME / EC3 / BS 7608 / AWS), ASTM E1049 rainflow, Palmgren-Miner damage, spectrum assessment with mean-stress correction and thickness / surface / environment knockdowns |
 | `pipeline` | `AnalysisCase` model + `run_analysis()` orchestrator, parametric `study`, HTML `report`, `comparison` |
 | `probabilistic` | Monte Carlo (LHS), Sobol sensitivity, FORM reliability |
 | `ml` | Random Forest / XGBoost fatigue predictor with transfer learning |
@@ -120,16 +121,16 @@ Package responsibilities:
 ## Analysis pipeline
 
 `run_analysis()` in `pipeline/workflow.py` is the orchestrator. It reads the
-`AnalysisCase`, dispatches the solve on `SolverType`, applies any coupled thermal
-or PWHT step, runs each requested post-processing method independently, and then
-layers optional fatigue, mesh-sensitivity, and probabilistic passes before the
-report.
+`AnalysisCase`, dispatches the solve on `SolverType`, applies any coupled
+thermal, PWHT, or residual-stress step, runs each requested post-processing
+method independently, and then layers optional mesh-sensitivity, fatigue, and
+probabilistic passes before the report.
 
 ```mermaid
 flowchart TD
     yaml["load_case(YAML)"] --> case["AnalysisCase"]
     case --> geo["build joint<br/>(JointType dispatch)"]
-    geo --> meshgen["generate_mesh<br/>(Gmsh, toe refinement)"]
+    geo --> meshgen["generate_mesh<br/>(Gmsh, 2D or dim=3)"]
     meshgen --> solve{"solver_type?"}
 
     solve -->|linear_elastic| le["backend.solve_static"]
@@ -150,18 +151,21 @@ flowchart TD
     thermalq -->|no| pwhtq{"pwht_enabled?"}
     goldak --> pwhtq
 
-    pwhtq -->|yes| relax["simulate_pwht<br/>(stress relaxation)"]
-    pwhtq -->|no| pp["per-StressMethod<br/>postprocess"]
-    relax --> pp
+    pwhtq -->|yes| relax["PWHT relaxation<br/>(residual stress or solved field)"]
+    pwhtq -->|no| resid["residual stress, if configured<br/>(fatigue mean; optional field superimpose)"]
+    relax --> resid
+    resid --> pp["per-StressMethod<br/>postprocess"]
 
-    pp --> fatq{"fatigue_assessment?"}
-    fatq -->|yes| fatigue["S-N · rainflow · Miner"]
-    fatq -->|no| singq{"singularity_check?"}
-    fatigue --> singq
+    pp --> singq{"singularity_check?"}
+    singq -->|"yes (2D)"| coarse["coarse re-solve<br/>+ detect singularities"]
+    singq -->|"no / 3D skip"| fatq{"fatigue_assessment?"}
+    coarse --> fatq
 
-    singq -->|yes| coarse["coarse re-solve<br/>+ detect singularities"]
-    singq -->|no| probq{"probabilistic.enabled?"}
-    coarse --> probq
+    fatq -->|yes| cyc["build cycle set<br/>(R-ratio · blocks · rainflow history)"]
+    fatq -->|no| probq{"probabilistic.enabled?"}
+    cyc --> assess["per-method S-N assessment<br/>(mean stress · knockdowns · residual mean)"]
+    assess --> miner["Miner damage → life"]
+    miner --> probq
 
     probq -->|yes| mc["Monte Carlo<br/>(closed-form response)"]
     probq -->|no| report["Jinja2 HTML report"]
@@ -171,10 +175,36 @@ flowchart TD
 Two back-compatibility rules run before the dispatch: a case with
 `thermal.enabled` and the default `linear_elastic` solver is promoted to
 `thermomechanical`, and a `linear_elastic` case with `nonlinear: true` is promoted
-to `elastoplastic`. The singularity check only runs for `linear_elastic` /
-`elastoplastic` solves with `thermal.enabled` false. See the
+to `elastoplastic`. The singularity check only runs for plain `linear_elastic`
+solves — plasticity and a thermal or PWHT pass make its coarse baseline
+incomparable — and is skipped with a warning for
+`geometry.dimension: 3`, since it re-meshes and compares 2D sections. See the
 [Solvers](guides/solvers.md) and [Convergence & submodeling](guides/convergence.md)
 guides for the details.
+
+Between the solve and post-processing, the orchestrator resolves any residual
+stress configured under `fatigue.residual_stress` — a named through-thickness
+profile's surface value, a direct value in MPa, or as-welded yield magnitude.
+When PWHT is enabled and a residual stress is configured (with no welding thermal
+pass), the relaxation applies to that *residual* stress through a Norton-Bailey
+probe rather than to the solved load field; without a residual configuration the
+legacy field-relaxation path is kept, with a warning. The (possibly relaxed)
+residual always enters the fatigue assessment as a residual mean stress;
+`superimpose: true` additionally adds its through-thickness field to the saved
+stress output after post-processing, so it reaches exports and report field
+figures without ever inflating a fatigue stress range.
+
+The fatigue stage is itself a chain. With no cyclic definition in the `fatigue:`
+block it keeps the legacy one-shot evaluation — each method's `max_stress` read
+off the case S-N curve once. With `r_ratio`, `blocks`, or a rainflow-counted
+`history` / `history_file` it builds a `(range, mean, count)` cycle set, scales
+factor-space definitions by each method's reference stress (absolute MPa
+definitions pass through as-is), applies the Goodman/Gerber mean-stress
+correction plus the thickness / surface / environment knockdowns and the residual
+mean, and sums Palmgren-Miner damage into a life per method. The governing
+(highest-damage) method's cycles feed the rainflow and damage-map report figures.
+See the [Fatigue assessment guide](guides/fatigue_assessment.md) for the full
+chain.
 
 ## Post-processing dispatch
 
@@ -206,15 +236,28 @@ flowchart LR
     m8 --> mod7["postprocess/blodgett.py"]
 ```
 
+The same dispatch serves both dimensions. For a `geometry.dimension: 3` case the
+dispatcher receives one ordered weld line per `weld_toe_{i}` node set (built by
+`_weld_lines_from_mesh`); the hot-spot methods evaluate stations along every toe
+line and report the maximum over all stations plus `critical_line` /
+`n_stations`, while the point-evaluation methods use the highest-stressed toe
+node across the lines. `structural_dong` is 2D-only — in 3D it raises an
+informative error that lands in `result.errors` without blocking the other
+methods.
+
 Methods that carry a mandated S-N curve — effective notch stress (IIW FAT225),
 Dong's master curve, and the SED power law — return their own `fatigue_life`, and
 the fatigue stage prefers those over the generic curve named in
-`postprocess.sn_curve`. See [Custom post-processing](tutorials/03_custom_postprocessing.md)
-to add a method.
+`postprocess.sn_curve`. Under a spectrum the mandate is still honored: the
+effective-notch cycles are assessed against FAT225 with the full mean-stress and
+knockdown corrections, while Dong and SED — whose codes fix a single-slope life
+law as-is — get an exact power-law spectrum life with no corrections, flagged
+`corrections_applied: false` in the results. See
+[Custom post-processing](tutorials/03_custom_postprocessing.md) to add a method.
 
 ## Core data contract
 
-`AnalysisCase` composes eight configuration sub-models. `run_analysis()` returns a
+`AnalysisCase` composes nine configuration sub-models. `run_analysis()` returns a
 `WorkflowResult` that aggregates the case, the mesh, the solver results, and the
 post-processing / fatigue / probabilistic payload dicts. All solver output flows
 through `FEAResults`, which owns a `FEMesh` and an optional `StressField`.
@@ -228,9 +271,17 @@ classDiagram
         +MeshConfig mesh
         +SolverConfig solver
         +LoadConfig load
+        +FatigueConfig fatigue
         +PostProcessConfig postprocess
         +ThermalConfig thermal
         +ProbabilisticConfig probabilistic
+    }
+    class FatigueConfig {
+        +float r_ratio
+        +list~SpectrumBlock~ blocks
+        +str history_file
+        +str mean_stress_correction
+        +ResidualStressConfig residual_stress
     }
     class WorkflowResult {
         +bool success
@@ -266,6 +317,15 @@ classDiagram
         +float m
         +float C
     }
+    class SNStandard {
+        <<enumeration>>
+        IIW
+        DNV
+        ASME
+        EC3
+        BS7608
+        AWS
+    }
     class JointType {
         <<enumeration>>
         FILLET_T
@@ -300,9 +360,12 @@ classDiagram
     AnalysisCase *-- MeshConfig
     AnalysisCase *-- SolverConfig
     AnalysisCase *-- LoadConfig
+    AnalysisCase *-- FatigueConfig
     AnalysisCase *-- PostProcessConfig
     AnalysisCase *-- ThermalConfig
     AnalysisCase *-- ProbabilisticConfig
+    FatigueConfig *-- SpectrumBlock
+    FatigueConfig *-- ResidualStressConfig
     WorkflowResult o-- AnalysisCase
     WorkflowResult o-- FEAResults
     FEAResults o-- FEMesh

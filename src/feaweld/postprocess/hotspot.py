@@ -25,6 +25,8 @@ class HotSpotResult:
     reference_distances: list[float]  # distances of reference points from weld toe (mm)
     extrapolation_type: HotSpotType
     weld_toe_location: NDArray[np.float64]
+    well_resolved: bool = True        # False when the mesh is too coarse to
+                                      # place distinct reference points
 
 
 def hotspot_stress_linear(
@@ -56,6 +58,7 @@ def hotspot_stress_linear(
 
     mesh = results.mesh
     tree = cKDTree(mesh.nodes)
+    weld_centroid = _weld_region_centroid(mesh)
 
     results_list = []
     t = weld_line.plate_thickness
@@ -83,13 +86,20 @@ def hotspot_stress_linear(
                 "cannot determine surface direction for hot-spot extrapolation."
             )
         surface_dir = surface_dir / _sd_norm
+        surface_dir = _orient_away_from_weld(surface_dir, toe_pos, weld_centroid)
 
-        ref_stresses = []
+        ref_stresses, ref_nodes = [], []
+        well_resolved = True
         for d in ref_distances:
             ref_point = toe_pos + d * surface_dir
-            _, nearest = tree.query(ref_point)
+            dist, nearest = tree.query(ref_point)
+            if dist > 0.5 * d:
+                well_resolved = False
+            ref_nodes.append(int(nearest))
             stress_vm = results.stress.von_mises[nearest]
             ref_stresses.append(float(stress_vm))
+        if len(set(ref_nodes)) < len(ref_nodes):
+            well_resolved = False
 
         # Extrapolation
         if hot_spot_type == HotSpotType.TYPE_A:
@@ -105,6 +115,7 @@ def hotspot_stress_linear(
             reference_distances=ref_distances,
             extrapolation_type=hot_spot_type,
             weld_toe_location=toe_pos.copy(),
+            well_resolved=well_resolved,
         ))
 
     return results_list
@@ -125,6 +136,7 @@ def hotspot_stress_quadratic(
 
     mesh = results.mesh
     tree = cKDTree(mesh.nodes)
+    weld_centroid = _weld_region_centroid(mesh)
     t = weld_line.plate_thickness
     normal = weld_line.normal_direction
 
@@ -143,12 +155,19 @@ def hotspot_stress_quadratic(
                 "cannot determine surface direction for hot-spot extrapolation."
             )
         surface_dir = surface_dir / _sd_norm
+        surface_dir = _orient_away_from_weld(surface_dir, toe_pos, weld_centroid)
 
-        ref_stresses = []
+        ref_stresses, ref_nodes = [], []
+        well_resolved = True
         for d in ref_distances:
             ref_point = toe_pos + d * surface_dir
-            _, nearest = tree.query(ref_point)
+            dist, nearest = tree.query(ref_point)
+            if dist > 0.5 * d:
+                well_resolved = False
+            ref_nodes.append(int(nearest))
             ref_stresses.append(float(results.stress.von_mises[nearest]))
+        if len(set(ref_nodes)) < len(ref_nodes):
+            well_resolved = False
 
         # Quadratic extrapolation
         sigma_hs = 3.0 * ref_stresses[0] - 3.0 * ref_stresses[1] + ref_stresses[2]
@@ -159,6 +178,7 @@ def hotspot_stress_quadratic(
             reference_distances=ref_distances,
             extrapolation_type=HotSpotType.TYPE_B,
             weld_toe_location=toe_pos.copy(),
+            well_resolved=well_resolved,
         ))
 
     return results_list
@@ -169,15 +189,89 @@ def max_hotspot_stress(results_list: list[HotSpotResult]) -> HotSpotResult:
     return max(results_list, key=lambda r: r.hot_spot_stress)
 
 
+def order_weld_line_nodes(
+    mesh: FEMesh,
+    node_ids: NDArray[np.int64],
+) -> NDArray[np.int64]:
+    """Order weld-toe nodes spatially along the dominant toe direction.
+
+    Node sets recovered from mesh physical groups carry no spatial
+    ordering, but tangent estimation treats neighbouring array entries as
+    neighbouring points.  The node coordinates are centred and projected
+    onto their first principal axis (via `numpy.linalg.svd`), and the ids
+    are sorted by that projection.
+
+    Parameters
+    ----------
+    mesh : FEMesh
+        Mesh providing the node coordinates.
+    node_ids : NDArray[np.int64]
+        Weld-toe node indices in arbitrary order.
+
+    Returns
+    -------
+    NDArray[np.int64]
+        The same ids sorted along the weld line.  Which end comes first
+        is arbitrary (the principal-axis sign is not defined).
+    """
+    ids = np.asarray(node_ids, dtype=np.int64)
+    if ids.size <= 1:
+        return ids.copy()
+
+    coords = mesh.nodes[ids]
+    centered = coords - coords.mean(axis=0)
+    _, _, vh = np.linalg.svd(centered, full_matrices=False)
+    projection = centered @ vh[0]
+    return ids[np.argsort(projection, kind="stable")]
+
+
+def _weld_region_centroid(mesh: FEMesh) -> NDArray[np.float64] | None:
+    """Mean node coordinate of "weld"-named element groups, or None."""
+    group_elems = [
+        elems
+        for name, elems in mesh.physical_groups.items()
+        if "weld" in name.lower()
+    ]
+    if not group_elems:
+        return None
+
+    elem_ids = np.unique(np.concatenate(group_elems))
+    nodes = np.unique(mesh.elements[elem_ids].ravel())
+    return mesh.nodes[nodes].mean(axis=0)
+
+
+def _orient_away_from_weld(
+    surface_dir: NDArray[np.float64],
+    toe_pos: NDArray[np.float64],
+    weld_centroid: NDArray[np.float64] | None,
+) -> NDArray[np.float64]:
+    """Flip *surface_dir* so extrapolation points away from the weld region.
+
+    ``cross(normal, tangent)`` has arbitrary sign; sampling into the weld
+    metal instead of the loaded plate silently corrupts the extrapolation.
+    Without a "weld" element group the direction is kept as computed.
+    """
+    if weld_centroid is None:
+        return surface_dir
+    if np.dot(surface_dir, weld_centroid - toe_pos) > 0.0:
+        return -surface_dir
+    return surface_dir
+
+
 def _estimate_weld_tangent(
     mesh: FEMesh,
     weld_line: WeldLineDefinition,
     node_id: int,
 ) -> NDArray[np.float64]:
-    """Estimate the tangent direction of the weld line at a given node."""
-    ids = weld_line.node_ids
-    idx = np.searchsorted(ids, node_id)
-    idx = min(max(idx, 0), len(ids) - 1)
+    """Estimate the tangent direction of the weld line at a given node.
+
+    ``weld_line.node_ids`` is taken as spatially ordered (see
+    [order_weld_line_nodes][feaweld.postprocess.hotspot.order_weld_line_nodes]);
+    the tangent is the chord between the node's ordered neighbours.
+    """
+    ids = np.asarray(weld_line.node_ids)
+    matches = np.nonzero(ids == node_id)[0]
+    idx = int(matches[0]) if matches.size > 0 else 0
 
     if idx == 0 and len(ids) > 1:
         p0 = mesh.nodes[ids[0]]

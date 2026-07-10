@@ -1,5 +1,8 @@
 """Tests for the Click command-line interface."""
 
+import re
+from pathlib import Path
+
 import numpy as np
 import pytest
 from click.testing import CliRunner
@@ -37,6 +40,62 @@ def test_blodgett_all_shapes(runner):
             "blodgett", "-g", shape, "--d", "100", "--b", "50", "-t", "5",
         ])
         assert result.exit_code == 0, f"{shape}: {result.output}"
+
+
+def test_fatigue_constant_amplitude_damage(runner):
+    from feaweld.fatigue.sn_curves import parse_sn_spec
+
+    result = runner.invoke(main, [
+        "fatigue", "--stress-range", "100", "-n", "1e5", "-c", "IIW_FAT90",
+    ])
+    assert result.exit_code == 0, result.output
+    expected = 1e5 / parse_sn_spec("IIW_FAT90").life(100.0)
+    assert f"{expected:.4e}" in result.output
+
+
+def test_fatigue_ec3_reference_life(runner):
+    result = runner.invoke(main, [
+        "fatigue", "--stress-range", "90", "-c", "EC3_90",
+    ])
+    assert result.exit_code == 0, result.output
+    # EC3 category 90 is anchored at 2e6 cycles for a 90 MPa range.
+    assert "2.000e+06" in result.output
+
+
+def test_fatigue_history_csv(runner, tmp_path):
+    hist = tmp_path / "history.csv"
+    hist.write_text("0\n100\n20\n120\n0\n80\n10\n90\n5\n")
+
+    result = runner.invoke(main, [
+        "fatigue", "--history", str(hist), "-c", "BS7608_D",
+    ])
+    assert result.exit_code == 0, result.output
+    match = re.search(r"cycles counted = ([\d.]+)", result.output)
+    assert match is not None, result.output
+    assert float(match.group(1)) > 0
+    assert "spectrum repeats" in result.output
+
+
+def test_fatigue_list_curves(runner):
+    result = runner.invoke(main, ["fatigue", "--list-curves"])
+    assert result.exit_code == 0, result.output
+    for standard in ("IIW", "DNV", "ASME", "EC3", "BS 7608", "AWS"):
+        assert standard in result.output
+
+
+def test_fatigue_requires_one_loading_style(runner):
+    result = runner.invoke(main, ["fatigue"])
+    assert result.exit_code != 0
+    assert "exactly one" in result.output
+
+
+def test_fatigue_goodman_requires_sigma_u(runner):
+    result = runner.invoke(main, [
+        "fatigue", "--stress-range", "100", "--mean-correction", "goodman",
+    ])
+    assert result.exit_code != 0
+    assert "--sigma-u" in result.output
+    assert "goodman" in result.output
 
 
 def test_materials_lists(runner):
@@ -213,6 +272,92 @@ def test_twin_update_recovers_parameter(runner, tmp_path):
     assert result.exit_code == 0, result.output
     assert "yield_strength" in result.output
     assert "Posterior" in result.output
+
+
+# ---------------------------------------------------------------------------
+# animate: block-sequence sourcing
+# ---------------------------------------------------------------------------
+
+def _animate_setup(tmp_path, monkeypatch, postprocess_results):
+    """Save a minimal case YAML and stub the heavy animate dependencies.
+
+    Patches ``run_analysis`` to return a WorkflowResult carrying
+    *postprocess_results* and ``animate_damage_evolution`` to capture the
+    block sequence it receives.  Returns (case_path, captured_dict).
+    """
+    from feaweld.pipeline import workflow as workflow_mod
+    from feaweld.pipeline.workflow import AnalysisCase, WorkflowResult, save_case
+    from feaweld.visualization import fatigue_plots as fatigue_plots_mod
+
+    case = AnalysisCase(name="animate_test")
+    path = tmp_path / "case.yaml"
+    save_case(case, path)
+
+    monkeypatch.setattr(
+        workflow_mod, "run_analysis",
+        lambda c: WorkflowResult(case=c, postprocess_results=postprocess_results),
+    )
+
+    captured: dict = {}
+
+    def fake_animate(load_blocks, sn_curve, output, fps=10, **kwargs):
+        captured["blocks"] = [list(block) for block in load_blocks]
+        return Path(output)
+
+    monkeypatch.setattr(
+        fatigue_plots_mod, "animate_damage_evolution", fake_animate,
+    )
+    return str(path), captured
+
+
+def test_animate_uses_pipeline_rainflow_stash(runner, tmp_path, monkeypatch):
+    """With only the workflow's postprocess_results["rainflow"] stash (a flat
+    list of (range, mean, count) triples), animate converts it to one block
+    per cycle family instead of synthesizing blocks."""
+    pytest.importorskip("matplotlib")
+    stash = [(160.0, 20.0, 4.0), (80.0, 0.0, 12.0)]
+    case_path, captured = _animate_setup(
+        tmp_path, monkeypatch, {"rainflow": stash},
+    )
+
+    result = runner.invoke(main, [
+        "animate", case_path, "-o", str(tmp_path / "damage.gif"),
+    ])
+    assert result.exit_code == 0, result.output
+    assert "synthetic" not in result.output
+    assert captured["blocks"] == [[(160.0, 20.0, 4.0)], [(80.0, 0.0, 12.0)]]
+
+
+def test_animate_load_blocks_takes_precedence(runner, tmp_path, monkeypatch):
+    """An explicit load_blocks sequence is animated as-is, even when the
+    rainflow stash is also present."""
+    pytest.importorskip("matplotlib")
+    blocks = [[(100.0, 0.0, 5.0)], [(120.0, 0.0, 5.0), (60.0, 0.0, 8.0)]]
+    case_path, captured = _animate_setup(
+        tmp_path, monkeypatch,
+        {"load_blocks": blocks, "rainflow": [(999.0, 0.0, 1.0)]},
+    )
+
+    result = runner.invoke(main, [
+        "animate", case_path, "-o", str(tmp_path / "damage.gif"),
+    ])
+    assert result.exit_code == 0, result.output
+    assert "synthetic" not in result.output
+    assert captured["blocks"] == blocks
+
+
+def test_animate_synthetic_fallback(runner, tmp_path, monkeypatch):
+    """Without load_blocks or a rainflow stash, animate synthesizes blocks."""
+    pytest.importorskip("matplotlib")
+    case_path, captured = _animate_setup(tmp_path, monkeypatch, {"other": 1})
+
+    result = runner.invoke(main, [
+        "animate", case_path, "-o", str(tmp_path / "damage.gif"),
+        "--blocks", "4",
+    ])
+    assert result.exit_code == 0, result.output
+    assert "synthetic" in result.output
+    assert len(captured["blocks"]) == 4
 
 
 def test_study_compare_runs_each_case_once(runner, tmp_path, monkeypatch):

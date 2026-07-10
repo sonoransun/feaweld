@@ -1,0 +1,23 @@
+# AWS D1.1 / AISC 360 fatigue stress categories.
+# Single slope m = 3 with a constant-amplitude fatigue threshold F_TH per
+# category (infinite life below F_TH).
+# US-customary form:  F_SR(ksi) = (Cf * 1e8 / N)^(1/3)
+# SI form used here is the standard published AISC/AWS conversion
+#   F_SR(MPa) = (Cf * 329e8 / N)^(1/3)
+# i.e. C_MPa3 = Cf_ksi * 3.29e10.  The exact conversion 1 ksi = 6.894757 MPa
+# would scale Cf by 6.894757^3 ~= 327.7; the published SI equations round
+# this to 329, which is what si_factor encodes.
+# BP / EP are the primed categories B' / E'.
+
+conventions:
+  m: 3
+  si_factor: 3.29e+10
+
+categories:
+  A:  {Cf_ksi: 250.0, f_th_mpa: 165.0}
+  B:  {Cf_ksi: 120.0, f_th_mpa: 110.0}
+  BP: {Cf_ksi: 61.0, f_th_mpa: 82.7}
+  C:  {Cf_ksi: 44.0, f_th_mpa: 69.0}
+  D:  {Cf_ksi: 22.0, f_th_mpa: 48.3}
+  E:  {Cf_ksi: 11.0, f_th_mpa: 31.0}
+  EP: {Cf_ksi: 3.9, f_th_mpa: 17.9}

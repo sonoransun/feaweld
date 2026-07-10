@@ -48,8 +48,10 @@ nav:
       - Custom post-processing: tutorials/03_custom_postprocessing.md
   - Guides:
       - Solvers: guides/solvers.md
+      - 3D analysis: guides/analysis_3d.md
       - Loads & boundary conditions: guides/loads_and_bcs.md
       - PWHT: guides/pwht.md
+      - Fatigue assessment: guides/fatigue_assessment.md
       - Probabilistic & reliability: guides/probabilistic.md
       - ML fatigue prediction: guides/ml.md
       - Multiscale modeling: guides/multiscale.md
@@ -61,6 +63,7 @@ nav:
       - CLI: reference/cli.md
   - API reference:
       - core: api/core.md
+      - data: api/data.md
       - geometry: api/geometry.md
       - mesh: api/mesh.md
       - solver: api/solver.md

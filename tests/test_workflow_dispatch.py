@@ -28,14 +28,19 @@ from feaweld.core.loads import moment_to_nodal_forces
 from feaweld.fatigue.sn_curves import parse_sn_spec
 from feaweld.pipeline.workflow import (
     AnalysisCase,
+    FatigueConfig,
     GeometryConfig,
     LoadConfig,
     MaterialConfig,
+    MeshConfig,
     PostProcessConfig,
     ProbabilisticConfig,
     SolverConfig,
     ThermalConfig,
+    WeldEfficiencyConfig,
     WorkflowResult,
+    _build_geometry,
+    _build_heat_source,
     _build_load_case,
     _run_fatigue_assessment,
     _run_postprocess,
@@ -489,6 +494,135 @@ def test_run_fatigue_assessment():
 
 
 # ---------------------------------------------------------------------------
+# Geometry config passthrough
+# ---------------------------------------------------------------------------
+
+def test_build_geometry_butt_groove_passthrough():
+    """Butt-weld groove parameters flow from the YAML config to ButtWeld."""
+    from feaweld.geometry.joints import ButtWeld
+    from feaweld.core.types import JointType
+
+    joint = _build_geometry(GeometryConfig(
+        joint_type=JointType.BUTT, base_width=200.0, base_thickness=20.0,
+        groove_angle=45.0, root_gap=1.0, penetration="partial",
+    ))
+    assert isinstance(joint, ButtWeld)
+    assert joint.groove_angle == 45.0
+    assert joint.root_gap == 1.0
+    assert joint.penetration == "partial"
+    assert joint.plate_width == 200.0
+    assert joint.plate_thickness == 20.0
+
+
+def test_geometry_config_groove_defaults_match_buttweld():
+    """GeometryConfig groove defaults equal the ButtWeld dataclass defaults."""
+    from feaweld.geometry.joints import ButtWeld
+
+    cfg = GeometryConfig()
+    joint = ButtWeld(plate_width=200.0, plate_thickness=20.0)
+    assert cfg.groove_angle == joint.groove_angle
+    assert cfg.root_gap == joint.root_gap
+    assert cfg.penetration == joint.penetration
+
+
+def test_geometry_penetration_validator():
+    """penetration is restricted to full/partial and case-normalized.
+
+    ButtWeld exact-matches the lowercase "full", so an unvalidated "Full"
+    used to silently build the partial-penetration geometry.
+    """
+    assert GeometryConfig(penetration="Partial").penetration == "partial"
+    assert GeometryConfig(penetration="FULL").penetration == "full"
+    with pytest.raises(ValueError, match="'full' or 'partial'"):
+        GeometryConfig(penetration="none")
+    with pytest.raises(ValueError, match="'full' or 'partial'"):
+        GeometryConfig(penetration="complete")
+
+
+# ---------------------------------------------------------------------------
+# Weld joint efficiency
+# ---------------------------------------------------------------------------
+
+def test_asme_allowable_check_joint_efficiency_scales_limits():
+    from feaweld.postprocess.nominal import (
+        StressCategorization, asme_allowable_check,
+    )
+
+    cat = StressCategorization(membrane=100.0, bending=30.0, peak=10.0,
+                               total=140.0, stress_intensity=140.0)
+    base = asme_allowable_check(cat, S_m=160.0, S_y=250.0)
+    scaled = asme_allowable_check(cat, S_m=160.0, S_y=250.0,
+                                  joint_efficiency=0.85)
+
+    e_sm = 0.85 * 160.0
+    assert scaled["Pm"]["limit"] == pytest.approx(e_sm)
+    assert scaled["PL"]["limit"] == pytest.approx(1.5 * e_sm)
+    assert scaled["Pm+Pb"]["limit"] == pytest.approx(1.5 * e_sm)
+    assert scaled["PL+Pb+Q"]["limit"] == pytest.approx(
+        max(3.0 * e_sm, 2.0 * 250.0)
+    )
+    assert scaled["joint_efficiency"] == pytest.approx(0.85)
+
+    # Default efficiency (1.0) is unchanged vs the pre-efficiency behavior.
+    assert "joint_efficiency" not in base
+    assert base["Pm"]["limit"] == pytest.approx(160.0)
+    assert base["PL+Pb+Q"]["limit"] == pytest.approx(max(3.0 * 160.0, 500.0))
+
+
+def test_postprocess_nominal_weld_efficiency_value(grid_plate_mesh, fake_backend):
+    """A direct weld_efficiency value scales the four ASME limits."""
+    mat = _material()
+    results = fake_backend.solve_static(grid_plate_mesh, mat, None)
+
+    base_out = _run_postprocess(StressMethod.NOMINAL, results, grid_plate_mesh,
+                                _dispatch_case(), mat)
+    eff_case = AnalysisCase(
+        geometry=GeometryConfig(base_width=40.0, base_thickness=20.0),
+        postprocess=PostProcessConfig(
+            weld_efficiency=WeldEfficiencyConfig(value=0.85),
+        ),
+    )
+    eff_out = _run_postprocess(StressMethod.NOMINAL, results, grid_plate_mesh,
+                               eff_case, mat)
+
+    assert eff_out["weld_efficiency"] == pytest.approx(0.85)
+    assert "weld_efficiency" not in base_out
+    for key in ("Pm", "PL", "Pm+Pb"):
+        assert eff_out["asme_checks"][key]["limit"] == pytest.approx(
+            0.85 * base_out["asme_checks"][key]["limit"]
+        )
+
+
+def test_postprocess_nominal_weld_efficiency_lookup(grid_plate_mesh, fake_backend):
+    """A code-table lookup resolves E through data/weld_efficiency."""
+    mat = _material()
+    results = fake_backend.solve_static(grid_plate_mesh, mat, None)
+
+    case = AnalysisCase(
+        geometry=GeometryConfig(base_width=40.0, base_thickness=20.0),
+        postprocess=PostProcessConfig(
+            weld_efficiency=WeldEfficiencyConfig(
+                standard="ASME_VIII_Div1", joint_type="Type_1",
+                examination="Spot_RT",
+            ),
+        ),
+    )
+    out = _run_postprocess(StressMethod.NOMINAL, results, grid_plate_mesh,
+                           case, mat)
+    assert out["weld_efficiency"] == pytest.approx(0.85)
+
+
+def test_weld_efficiency_config_validators():
+    with pytest.raises(ValueError, match="not both"):
+        WeldEfficiencyConfig(value=0.8, standard="ASME_VIII_Div1",
+                             joint_type="Type_1", examination="Full_RT")
+    with pytest.raises(ValueError, match="needs"):
+        WeldEfficiencyConfig(standard="ASME_VIII_Div1")
+    with pytest.raises(ValueError, match="needs"):
+        WeldEfficiencyConfig()
+
+
+# ---------------------------------------------------------------------------
 # parse_sn_spec
 # ---------------------------------------------------------------------------
 
@@ -617,7 +751,7 @@ def _mesh_without_weld_toe() -> FEMesh:
 def _run_full_analysis(case, mesh, fake_backend, monkeypatch):
     """Run ``run_analysis`` with a fixed mesh and the FakeBackend."""
     monkeypatch.setattr("feaweld.mesh.generator.generate_mesh",
-                        lambda joint, cfg: mesh)
+                        lambda joint, cfg, **kwargs: mesh)
     monkeypatch.setattr("feaweld.solver.backend.get_backend",
                         lambda preference="auto": fake_backend)
     return run_analysis(case)
@@ -682,3 +816,216 @@ def test_singularity_check_skipped_when_pwht(fake_backend, monkeypatch,
     )
     result = _run_full_analysis(case, grid_plate_mesh, fake_backend, monkeypatch)
     assert "singularity_check" not in result.postprocess_results
+
+
+# ---------------------------------------------------------------------------
+# 3D pipeline (dimension == 3, grid_solid_mesh + FakeBackend)
+# ---------------------------------------------------------------------------
+
+def _geometry_3d(**over) -> GeometryConfig:
+    kw = dict(base_width=40.0, base_thickness=20.0, web_thickness=10.0,
+              weld_leg_size=8.0, dimension=3, length=40.0)
+    kw.update(over)
+    return GeometryConfig(**kw)
+
+
+def _case_3d(**over) -> AnalysisCase:
+    kw = dict(
+        geometry=_geometry_3d(),
+        mesh=MeshConfig(global_size=10.0, weld_toe_size=2.5),
+        load=LoadConfig(axial_force=2500.0),
+    )
+    kw.update(over)
+    return AnalysisCase(**kw)
+
+
+def test_geometry_dimension_validator():
+    assert GeometryConfig(dimension=2).dimension == 2
+    assert AnalysisCase(**{"geometry": {"dimension": 3}}).geometry.dimension == 3
+    with pytest.raises(ValueError, match="2 or 3"):
+        GeometryConfig(dimension=4)
+
+
+def test_build_geometry_passes_dimension():
+    joint = _build_geometry(_geometry_3d())
+    assert joint.dimension == 3
+    assert joint.length == 40.0
+
+
+def test_build_load_case_3d_divides_over_top_face(grid_solid_mesh):
+    lc = _build_load_case(LoadConfig(axial_force=2500.0), grid_solid_mesh)
+    n_top = len(grid_solid_mesh.node_sets["top"])
+    assert n_top == 25
+    axial = next(bc for bc in lc.loads if bc.bc_type == LoadType.FORCE)
+    np.testing.assert_allclose(axial.values, [2500.0 / 25])
+    np.testing.assert_allclose(axial.direction, [0.0, 1.0, 0.0])
+
+
+def test_build_heat_source_3d_starts_at_toe_line_min_z(grid_solid_mesh):
+    case = _case_3d(thermal=ThermalConfig(enabled=True))
+    source = _build_heat_source(case, grid_solid_mesh)
+    np.testing.assert_allclose(source.start_position, [20.0, 20.0, 0.0])
+    np.testing.assert_allclose(source.direction, [0.0, 0.0, 1.0])
+
+
+class TestRunAnalysis3D:
+    def test_full_pipeline(self, fake_backend, monkeypatch, grid_solid_mesh):
+        case = _case_3d(
+            postprocess=PostProcessConfig(stress_methods=[
+                StressMethod.HOTSPOT_LINEAR,
+                StressMethod.LINEARIZATION,
+                StressMethod.NOMINAL,
+                StressMethod.STRUCTURAL_DONG,
+            ]),
+            fatigue=FatigueConfig(r_ratio=0.1, cycles=1e5),
+        )
+        result = _run_full_analysis(case, grid_solid_mesh, fake_backend,
+                                    monkeypatch)
+
+        # Point/line methods produce finite stresses on the solid mesh.
+        for name in ("hotspot_linear", "linearization", "nominal"):
+            assert name in result.postprocess_results, result.errors
+            assert np.isfinite(result.postprocess_results[name]["max_stress"])
+
+        # Hot spot ran per station along the (single) toe line.
+        hs = result.postprocess_results["hotspot_linear"]
+        assert hs["critical_line"] == "weld_toe_0"
+        assert hs["n_stations"] == 5
+        assert len(hs["results"]) == 5
+
+        # structural_dong is 2D-only: lands in errors, not results.
+        assert "structural_dong" not in result.postprocess_results
+        assert any("2D cross-section" in e for e in result.errors)
+
+        # Singularity check auto-skips in 3D with a warning.
+        assert "singularity_check" not in result.postprocess_results
+        assert any("singularity check is 2D-only" in w for w in result.warnings)
+
+        # The fatigue assessment consumes the 3D hot-spot reference stress.
+        entry = result.fatigue_results["hotspot_linear"]
+        assert entry["stress_range"] == pytest.approx(hs["max_stress"])
+        for name in ("hotspot_linear", "linearization", "nominal"):
+            assert "damage" in result.fatigue_results[name]
+            assert result.fatigue_results[name]["damage"] > 0.0
+
+    def test_mesh_size_warnings(self, fake_backend, monkeypatch,
+                                grid_solid_mesh):
+        case = _case_3d(
+            geometry=_geometry_3d(length=5.0),
+            mesh=MeshConfig(global_size=10.0, weld_toe_size=0.5),
+            postprocess=PostProcessConfig(singularity_check=False,
+                                          fatigue_assessment=False),
+        )
+        result = _run_full_analysis(case, grid_solid_mesh, fake_backend,
+                                    monkeypatch)
+        assert any("sliver" in w for w in result.warnings)
+        assert any("tetrahedra" in w for w in result.warnings)
+
+    def test_no_mesh_size_warnings_for_sane_config(self, fake_backend,
+                                                   monkeypatch,
+                                                   grid_solid_mesh):
+        case = _case_3d(
+            postprocess=PostProcessConfig(singularity_check=False,
+                                          fatigue_assessment=False),
+        )
+        result = _run_full_analysis(case, grid_solid_mesh, fake_backend,
+                                    monkeypatch)
+        assert not any("sliver" in w for w in result.warnings)
+        assert not any("tetrahedra" in w for w in result.warnings)
+
+
+# ---------------------------------------------------------------------------
+# 3D hot-spot reduction: poorly resolved stations must not win the max
+# ---------------------------------------------------------------------------
+
+def _solid_nid(i, j, k, n=5):
+    """Node id on the 5x5x5 grid_solid_mesh."""
+    return (k * n + j) * n + i
+
+
+class TestHotspot3DWellResolvedExclusion:
+    """Stations flagged ``well_resolved=False`` carry raw nodal values, not
+    surface extrapolations; they must not compete for
+    ``max_stress``/``critical_line`` while a well-resolved station exists
+    (LapJoint upper end-face toe scenario)."""
+
+    @staticmethod
+    def _lines(mesh):
+        from feaweld.core.types import WeldLineDefinition
+
+        resolved_ids = np.array([_solid_nid(2, 4, k) for k in range(5)],
+                                dtype=np.int64)
+        edge_ids = np.array([_solid_nid(4, 4, k) for k in range(5)],
+                            dtype=np.int64)
+        resolved = WeldLineDefinition(
+            name="weld_toe_0", node_ids=resolved_ids,
+            plate_thickness=20.0,
+            normal_direction=np.array([0.0, 1.0, 0.0]),
+        )
+        # This line sits on the x = 40 top edge with a ±X normal: its
+        # 0.4t / 1.0t reference points leave the mesh (they end up above
+        # the y = 20 face) and both snap back to the toe node itself, so
+        # every station is well_resolved=False and sigma_hs degenerates
+        # to the raw corner nodal stress.
+        unresolved = WeldLineDefinition(
+            name="weld_toe_1", node_ids=edge_ids,
+            plate_thickness=20.0,
+            normal_direction=np.array([1.0, 0.0, 0.0]),
+        )
+        return resolved, unresolved, edge_ids
+
+    def test_unresolved_stations_excluded_from_critical_line(
+            self, grid_solid_mesh, fake_backend):
+        mat = _material()
+        case = _case_3d()
+        results = fake_backend.solve_static(grid_solid_mesh, mat, None)
+        resolved, unresolved, edge_ids = self._lines(grid_solid_mesh)
+        # Spike the end-face corner nodes so the bogus raw values would
+        # have won the max under the old behavior.
+        results.stress.values[edge_ids, 1] = 300.0
+
+        sink: list[str] = []
+        out = _run_postprocess(
+            StressMethod.HOTSPOT_LINEAR, results, grid_solid_mesh, case,
+            mat, weld_lines=[resolved, unresolved], warnings=sink,
+        )
+
+        vm = results.stress.von_mises
+        # weld_toe_0 extrapolates from the 0.4t / 1.0t surface nodes.
+        expected = (1.67 * vm[_solid_nid(3, 4, 0)]
+                    - 0.67 * vm[_solid_nid(4, 4, 0)])
+        bogus = float(vm[_solid_nid(4, 4, 0)])
+        assert expected < bogus  # the raw corner value would have won
+
+        assert out["critical_line"] == "weld_toe_0"
+        assert out["max_stress"] == pytest.approx(expected)
+        # All stations are still reported (nothing is dropped from
+        # results/n_stations, only from the competition) ...
+        assert out["n_stations"] == 10
+        assert sum(1 for r in out["results"] if not r.well_resolved) == 5
+        # ... with the per-line coarse-station warning, but no
+        # all-unresolved fallback warning.
+        assert any("weld_toe_1" in w and "not well resolved" in w
+                   for w in sink)
+        assert not any("cannot support" in w for w in sink)
+
+    def test_all_unresolved_falls_back_with_loud_warning(
+            self, grid_solid_mesh, fake_backend):
+        mat = _material()
+        case = _case_3d()
+        results = fake_backend.solve_static(grid_solid_mesh, mat, None)
+        _, unresolved, edge_ids = self._lines(grid_solid_mesh)
+
+        sink: list[str] = []
+        out = _run_postprocess(
+            StressMethod.HOTSPOT_LINEAR, results, grid_solid_mesh, case,
+            mat, weld_lines=[unresolved], warnings=sink,
+        )
+
+        vm = results.stress.von_mises
+        # With no well-resolved station anywhere, the raw values are kept
+        # (legacy behavior) and a loud warning is emitted.
+        assert out["critical_line"] == "weld_toe_1"
+        assert out["max_stress"] == pytest.approx(float(vm[edge_ids].max()))
+        assert any("cannot support hot-spot surface extrapolation" in w
+                   for w in sink)

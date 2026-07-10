@@ -14,6 +14,7 @@ from feaweld.core.types import (
 from feaweld.pipeline.workflow import (
     AnalysisCase, WorkflowResult, MaterialConfig, GeometryConfig,
     LoadConfig, MeshConfig, PostProcessConfig,
+    ResidualStressConfig, WeldEfficiencyConfig,
 )
 from feaweld.pipeline.study import (
     Study, StudyConfig, StudyResults, ParameterSweep,
@@ -89,6 +90,58 @@ class TestNestedAttr:
         assert _get_nested_attr(case, "name") == "base"
         assert _get_nested_attr(case, "mesh.global_size") == 2.0
 
+    def test_set_three_level_residual_stress(self):
+        """Depth-3 paths land on the nested sub-model, not replace it."""
+        case = _make_base_case()
+        updated = _set_nested_attr(case, "fatigue.residual_stress.value", 50.0)
+        assert isinstance(updated.fatigue.residual_stress, ResidualStressConfig)
+        assert updated.fatigue.residual_stress.value == 50.0
+        # The property the workflow reads (workflow step 4) still works.
+        assert updated.fatigue.residual_stress.configured
+        assert case.fatigue.residual_stress.value is None  # original unchanged
+
+    def test_set_three_level_weld_efficiency(self):
+        case = AnalysisCase(
+            name="base",
+            postprocess=PostProcessConfig(
+                weld_efficiency=WeldEfficiencyConfig(value=1.0)
+            ),
+        )
+        updated = _set_nested_attr(
+            case, "postprocess.weld_efficiency.value", 0.85
+        )
+        assert isinstance(
+            updated.postprocess.weld_efficiency, WeldEfficiencyConfig
+        )
+        assert updated.postprocess.weld_efficiency.value == 0.85
+        assert case.postprocess.weld_efficiency.value == 1.0
+
+    def test_invalid_top_level_raises(self):
+        with pytest.raises(ValueError, match="bogus"):
+            _set_nested_attr(_make_base_case(), "bogus", 1.0)
+
+    def test_invalid_intermediate_raises(self):
+        with pytest.raises(ValueError, match="fatigue.bogus"):
+            _set_nested_attr(_make_base_case(), "fatigue.bogus.value", 1.0)
+
+    def test_invalid_leaf_raises(self):
+        with pytest.raises(ValueError, match="fatigue.residual_stress.bogus"):
+            _set_nested_attr(
+                _make_base_case(), "fatigue.residual_stress.bogus", 1.0
+            )
+
+    def test_none_submodel_raises(self):
+        # weld_efficiency defaults to None -> descending into it is an error.
+        with pytest.raises(ValueError, match="postprocess.weld_efficiency"):
+            _set_nested_attr(
+                _make_base_case(), "postprocess.weld_efficiency.value", 0.85
+            )
+
+    def test_non_model_intermediate_raises(self):
+        # axial_force is a float, not a sub-model.
+        with pytest.raises(ValueError, match="load.axial_force.x"):
+            _set_nested_attr(_make_base_case(), "load.axial_force.x", 1.0)
+
 
 # ---------------------------------------------------------------------------
 # Tests: Study case generation
@@ -151,6 +204,30 @@ class TestStudyCaseGeneration:
         cases = s._generate_cases("grid")
         assert len(cases) == 1
         assert "baseline" in cases
+
+    def test_vary_three_level_paths(self):
+        """Sweeps over depth-3 config blocks reach the intended leaf."""
+        base = AnalysisCase(
+            name="base",
+            postprocess=PostProcessConfig(
+                weld_efficiency=WeldEfficiencyConfig(value=1.0)
+            ),
+        )
+        s = (
+            Study("test", base)
+            .vary("fatigue.residual_stress.value", [0.0, 50.0, 100.0])
+            .vary("postprocess.weld_efficiency.value", [0.85, 1.0])
+        )
+        cases = s._generate_cases("grid")
+        assert len(cases) == 6  # 3 x 2
+        res_values = {
+            c.fatigue.residual_stress.value for c in cases.values()
+        }
+        eff_values = {
+            c.postprocess.weld_efficiency.value for c in cases.values()
+        }
+        assert res_values == {0.0, 50.0, 100.0}
+        assert eff_values == {0.85, 1.0}
 
 
 # ---------------------------------------------------------------------------
@@ -359,6 +436,39 @@ class TestYAMLIO:
         assert len(loaded.parameters) == 1
         assert loaded.parameters[0].name == "load.axial_force"
         assert loaded.mode == "grid"
+
+    def test_load_study_sets_base_dir(self, tmp_path):
+        """A relative fatigue.history_file in a study base case resolves
+        against the study YAML's directory, like load_case does."""
+        (tmp_path / "load_history.csv").write_text("0\n100\n0\n80\n0\n")
+        config = StudyConfig(
+            name="hist_study",
+            base_case=AnalysisCase(
+                name="base",
+                fatigue={"history_file": "load_history.csv"},
+            ),
+            parameters=[
+                ParameterSweep(name="load.axial_force", values=[10000.0, 20000.0]),
+            ],
+        )
+        path = tmp_path / "study.yaml"
+        save_study(config, path)
+
+        loaded = load_study(path)
+        base_dir = loaded.base_case._base_dir
+        assert base_dir == str(tmp_path.resolve())
+        # The documented resolution (workflow: case._base_dir / history_file)
+        # now finds the CSV sitting next to the study file.
+        assert (Path(base_dir) / loaded.base_case.fatigue.history_file).is_file()
+
+        # Every generated case inherits it (model_copy keeps private attrs).
+        s = Study(loaded.name, loaded.base_case)
+        for sweep in loaded.parameters:
+            s.vary(sweep.name, sweep.values)
+        cases = s._generate_cases("grid")
+        assert len(cases) == 2
+        for case in cases.values():
+            assert case._base_dir == str(tmp_path.resolve())
 
 
 # ---------------------------------------------------------------------------

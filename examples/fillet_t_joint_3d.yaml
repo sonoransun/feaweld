@@ -1,0 +1,61 @@
+# Extruded (3D) fillet T-joint under axial tension.
+#
+# Ready-made copy of the case walked through in docs/guides/analysis_3d.md.
+# Run it with:
+#
+#     feaweld run examples/fillet_t_joint_3d.yaml
+#
+# geometry.dimension: 3 is the explicit 3D opt-in — with it, `length` becomes
+# the true extrusion depth along Z (the weld direction) instead of a quasi-2D
+# marker. The mesh block uses deliberately coarse 3D sizes: the 2D defaults
+# (global 2 mm / toe 0.2 mm) would explode into O(10^5+) tetrahedra.
+
+name: fillet_t_joint_3d_example
+description: Extruded fillet T-joint, per-station hot spot along the weld toe lines
+
+material:
+  base_metal: A36          # any key from `feaweld materials`
+  weld_metal: E70XX
+  haz: A36
+  temperature: 20.0        # service temperature (°C)
+
+geometry:
+  joint_type: fillet_t     # all five joint types extrude
+  dimension: 3             # 2 = cross-section (default) | 3 = extruded solid
+  base_width: 100.0        # mm
+  base_thickness: 20.0     # mm
+  web_height: 50.0         # mm
+  web_thickness: 10.0      # mm
+  weld_leg_size: 8.0       # mm — fillet weld leg
+  length: 40.0             # mm — extrusion depth = weld length (3D only)
+
+mesh:
+  global_size: 8.0         # mm — coarse background size for a 3D solid
+  weld_toe_size: 2.0       # mm — refinement band around the swept toe lines
+                           #      (0.1·t here; ~0.2·t suffices for hot spot)
+  element_order: 1         # 1 = TET4 (required by the FEniCS backend in 3D);
+                           #     2 = TET10 (CalculiX only)
+  element_type_3d: tet     # tet only in 3D; hex raises NotImplementedError
+
+solver:
+  solver_type: linear_elastic
+  backend: auto            # auto | fenics | calculix
+
+load:
+  axial_force: 50000.0     # N — split evenly over the web's top-face node set
+
+fatigue:
+  r_ratio: 0.1             # constant amplitude: R = sigma_min / sigma_max
+  cycles: 2.0e6            # design cycle count → damage reported as utilization
+
+postprocess:
+  stress_methods:          # structural_dong is 2D-only and would error in 3D
+    - hotspot_linear       # stations along each weld_toe_{i} line, max over all
+    - linearization
+    - nominal
+  sn_curve: IIW_FAT90
+  fatigue_assessment: true
+  # singularity_check is left at its default (true); the check is 2D-only and
+  # auto-skips for dimension: 3 with a warning.
+
+output_dir: results/fillet_t_joint_3d

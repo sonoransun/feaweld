@@ -215,6 +215,35 @@ def _resolve_case_sn_curve(wf: Any) -> Any:
     return parse_sn_spec(wf.case.postprocess.sn_curve)
 
 
+def _case_sn_curve_resolvable(wf: Any) -> bool:
+    try:
+        _resolve_case_sn_curve(wf)
+        return True
+    except Exception:
+        return False
+
+
+def _resolve_sigma_u(wf: Any) -> float | None:
+    """Ultimate strength of the case base metal, or ``None`` if unresolvable."""
+    try:
+        from feaweld.core.materials import load_material
+        material = load_material(wf.case.material.base_metal)
+        return float(material.sigma_u(wf.case.material.temperature))
+    except Exception:
+        return None
+
+
+def _haigh_available(wf: Any) -> bool:
+    if _rainflow_cycles(wf) is None:
+        return False
+    fatigue = getattr(wf.case, "fatigue", None)
+    if fatigue is None:
+        return False
+    if getattr(fatigue, "mean_stress_correction", "none") == "none":
+        return False
+    return _resolve_sigma_u(wf) is not None
+
+
 def _prob(wf: Any) -> dict:
     return wf.probabilistic_results or {}
 
@@ -349,6 +378,47 @@ def _build_rainflow(wf: Any) -> Any:
     return plot_rainflow_histogram(_rainflow_cycles(wf), kind="range", show=False)
 
 
+def _build_rainflow_matrix(wf: Any) -> Any:
+    from feaweld.visualization.fatigue_plots import plot_rainflow_histogram
+    return plot_rainflow_histogram(
+        _rainflow_cycles(wf), kind="range_mean", show=False,
+    )
+
+
+def _build_damage_per_block(wf: Any) -> Any:
+    import matplotlib.pyplot as plt
+    curve = _resolve_case_sn_curve(wf)
+    arr = np.asarray(_rainflow_cycles(wf), dtype=float)
+    ranges, counts = arr[:, 0], arr[:, 2]
+    life = np.array([curve.life(max(float(r), 1e-6)) for r in ranges])
+    damage = np.where(np.isfinite(life) & (life > 0.0), counts / life, 0.0)
+    hist, edges = np.histogram(ranges, bins=20, weights=damage)
+    centers = 0.5 * (edges[:-1] + edges[1:])
+    fig, ax = plt.subplots(figsize=(7, 4))
+    ax.bar(centers, hist, width=(edges[1] - edges[0]) * 0.9,
+           color="#2980b9", edgecolor="white", alpha=0.85)
+    ax.set_xlabel("Stress range Δσ (MPa)")
+    ax.set_ylabel("Miner damage per bin")
+    ax.set_title(f"Damage by Stress-Range Bin (ΣD = {float(hist.sum()):.3g})")
+    return fig
+
+
+def _build_haigh(wf: Any) -> Any:
+    from feaweld.core.materials import load_material
+    from feaweld.visualization.fatigue_plots import plot_haigh_diagram
+    sigma_u = _resolve_sigma_u(wf)
+    try:
+        material = load_material(wf.case.material.base_metal)
+        sigma_y = float(material.sigma_y(wf.case.material.temperature))
+    except Exception:
+        sigma_y = None
+    return plot_haigh_diagram(
+        _rainflow_cycles(wf), sigma_u,
+        correction=wf.case.fatigue.mean_stress_correction,
+        sigma_y=sigma_y, show=False,
+    )
+
+
 def _life_field(wf: Any) -> Any:
     curve = _resolve_case_sn_curve(wf)
     vm = wf.fea_results.stress.von_mises
@@ -481,6 +551,22 @@ FIGURE_SPECS: list[FigureSpec] = [
         key="rainflow", caption="Rainflow Cycle Histogram", kind="mpl",
         available=lambda wf: _rainflow_cycles(wf) is not None,
         build=_build_rainflow,
+    ),
+    FigureSpec(
+        key="rainflow_matrix", caption="Rainflow Range-Mean Matrix", kind="mpl",
+        available=lambda wf: len(_rainflow_cycles(wf) or []) >= 4,
+        build=_build_rainflow_matrix,
+    ),
+    FigureSpec(
+        key="damage_per_block", caption="Damage by Stress-Range Bin", kind="mpl",
+        available=lambda wf: _rainflow_cycles(wf) is not None
+        and _case_sn_curve_resolvable(wf),
+        build=_build_damage_per_block,
+    ),
+    FigureSpec(
+        key="haigh_diagram", caption="Haigh Mean-Stress Diagram", kind="mpl",
+        available=_haigh_available,
+        build=_build_haigh,
     ),
     FigureSpec(
         key="fatigue_life_map", caption="Fatigue Life Map", kind="pyvista",

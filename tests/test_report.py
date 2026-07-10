@@ -185,6 +185,61 @@ class TestFigureSpecPredicates:
         assert spec.available(present) is True
         assert spec.available(self._base()) is False
 
+    def test_rainflow_matrix_toggle(self):
+        spec = self._specs()["rainflow_matrix"]
+        present = self._base()
+        present.postprocess_results = {"rainflow": [
+            (50.0, 10.0, 1.0), (80.0, 20.0, 1.0),
+            (60.0, 15.0, 0.5), (100.0, 25.0, 1.0),
+        ]}
+        assert spec.available(present) is True
+        # A 2-D matrix needs at least 4 cycles to be worth drawing.
+        few = self._base()
+        few.postprocess_results = {"rainflow": [(50.0, 10.0, 1.0)]}
+        assert spec.available(few) is False
+        assert spec.available(self._base()) is False
+
+    def test_damage_per_block_toggle(self):
+        spec = self._specs()["damage_per_block"]
+        cycles = [(50.0, 0.0, 1.0), (80.0, 0.0, 0.5)]
+        present = self._base()
+        present.postprocess_results = {"rainflow": cycles}
+        # Default case carries a resolvable IIW_FAT90 curve.
+        assert spec.available(present) is True
+        assert spec.available(self._base()) is False
+        bad_curve = self._base()
+        bad_curve.postprocess_results = {"rainflow": cycles}
+        bad_curve.case.postprocess.sn_curve = "NOT_A_STANDARD"
+        assert spec.available(bad_curve) is False
+
+    def test_haigh_diagram_toggle(self):
+        from feaweld.pipeline.workflow import FatigueConfig
+
+        spec = self._specs()["haigh_diagram"]
+        cycles = [(50.0, 10.0, 1.0), (80.0, 20.0, 0.5)]
+
+        on = self._base()
+        on.case.fatigue = FatigueConfig(mean_stress_correction="goodman")
+        on.postprocess_results = {"rainflow": cycles}
+        assert spec.available(on) is True
+
+        # Default correction is "none" — no Haigh diagram.
+        no_correction = self._base()
+        no_correction.postprocess_results = {"rainflow": cycles}
+        assert no_correction.case.fatigue.mean_stress_correction == "none"
+        assert spec.available(no_correction) is False
+
+        no_cycles = self._base()
+        no_cycles.case.fatigue = FatigueConfig(mean_stress_correction="gerber")
+        assert spec.available(no_cycles) is False
+
+        # Unresolvable sigma_u degrades to unavailable, never raises.
+        bad_material = self._base()
+        bad_material.case.fatigue = FatigueConfig(mean_stress_correction="goodman")
+        bad_material.case.material.base_metal = "unobtainium"
+        bad_material.postprocess_results = {"rainflow": cycles}
+        assert spec.available(bad_material) is False
+
     def test_sobol_toggle(self):
         spec = self._specs()["sobol_indices"]
         present = self._base()
@@ -286,6 +341,75 @@ class TestFigureSpecPredicates:
         assert np.all(np.isfinite(life))
         assert float(np.max(life)) <= 1e12
         assert float(np.min(life)) >= 1.0
+
+
+# ---------------------------------------------------------------------------
+# Spectrum-fatigue figure builders and report smoke test
+# ---------------------------------------------------------------------------
+
+class TestSpectrumFigures:
+    _CYCLES = [
+        (50.0, 10.0, 1.0),
+        (80.0, 20.0, 1.0),
+        (120.0, 30.0, 0.5),
+        (60.0, 15.0, 1.0),
+        (100.0, 25.0, 1.0),
+        (40.0, 5.0, 1.0),
+    ]
+
+    def _spectrum_wf(self, correction: str = "goodman", **kwargs) -> WorkflowResult:
+        from feaweld.pipeline.workflow import FatigueConfig
+        wf = _make_workflow_result(**kwargs)
+        wf.case.fatigue = FatigueConfig(mean_stress_correction=correction)
+        wf.postprocess_results = {"rainflow": list(self._CYCLES)}
+        return wf
+
+    def _build(self, key: str, wf: WorkflowResult):
+        from feaweld.visualization.report_figures import FIGURE_SPECS
+        spec = {s.key: s for s in FIGURE_SPECS}[key]
+        assert spec.available(wf) is True
+        return spec.build(wf)
+
+    @pytest.mark.parametrize(
+        "key", ["rainflow_matrix", "damage_per_block", "haigh_diagram"],
+    )
+    def test_builder_returns_figure(self, key):
+        import matplotlib.pyplot as plt
+        fig = self._build(key, self._spectrum_wf())
+        assert isinstance(fig, plt.Figure)
+        plt.close(fig)
+
+    def test_haigh_builder_gerber(self):
+        import matplotlib.pyplot as plt
+        fig = self._build("haigh_diagram", self._spectrum_wf(correction="gerber"))
+        assert isinstance(fig, plt.Figure)
+        plt.close(fig)
+
+    def test_report_includes_spectrum_figures(self, tmp_path):
+        from feaweld.pipeline.report import generate_report
+        from feaweld.visualization.report_figures import generate_report_figures
+
+        wf = self._spectrum_wf(output_dir=str(tmp_path))
+        figures = generate_report_figures(wf)
+        for key in ("rainflow", "rainflow_matrix", "damage_per_block",
+                    "haigh_diagram"):
+            assert key in figures, key
+
+        html = open(generate_report(wf)).read()
+        assert "Rainflow Range-Mean Matrix" in html
+        assert "Damage by Stress-Range Bin" in html
+        assert "Haigh Mean-Stress Diagram" in html
+
+    def test_report_omits_haigh_without_correction(self, tmp_path):
+        from feaweld.pipeline.report import generate_report
+
+        wf = _make_workflow_result(output_dir=str(tmp_path))
+        wf.postprocess_results = {"rainflow": list(self._CYCLES)}
+        assert wf.case.fatigue.mean_stress_correction == "none"
+
+        html = open(generate_report(wf)).read()
+        assert "Rainflow Range-Mean Matrix" in html
+        assert "Haigh Mean-Stress Diagram" not in html
 
 
 # ---------------------------------------------------------------------------

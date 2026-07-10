@@ -270,25 +270,54 @@ class Study:
 def _set_nested_attr(case: AnalysisCase, path: str, value: Any) -> AnalysisCase:
     """Set a deeply nested attribute on an AnalysisCase via dot-path.
 
+    Walks arbitrary depth (e.g. ``fatigue.residual_stress.value``),
+    rebuilding each sub-model along the chain with ``model_copy`` so the
+    original case is left untouched.
+
     Example: _set_nested_attr(case, "load.axial_force", 50000)
+
+    Raises
+    ------
+    ValueError
+        If any component of the dot-path does not exist on the model it
+        is looked up on (including a sub-model that is ``None``).
     """
     parts = path.split(".")
 
-    if len(parts) == 1:
-        return case.model_copy(update={parts[0]: value})
+    # Walk down to the parent of the leaf, keeping every intermediate
+    # sub-model so the chain can be rebuilt bottom-up.
+    chain = [case]
+    for i, part in enumerate(parts[:-1]):
+        parent = chain[-1]
+        if not isinstance(parent, BaseModel) or part not in type(parent).model_fields:
+            raise ValueError(
+                f"Invalid parameter path '{path}': "
+                f"'{'.'.join(parts[:i + 1])}' does not exist on the case."
+            )
+        child = getattr(parent, part)
+        if child is None:
+            raise ValueError(
+                f"Invalid parameter path '{path}': "
+                f"'{'.'.join(parts[:i + 1])}' is None on the base case, so "
+                f"'{parts[i + 1]}' cannot be set on it."
+            )
+        chain.append(child)
 
-    # Navigate: top-level field -> sub-model field
-    top_key = parts[0]
-    sub_path = ".".join(parts[1:])
-    sub_model = getattr(case, top_key)
+    leaf_parent = chain[-1]
+    if (
+        not isinstance(leaf_parent, BaseModel)
+        or parts[-1] not in type(leaf_parent).model_fields
+    ):
+        raise ValueError(
+            f"Invalid parameter path '{path}': "
+            f"'{path}' does not exist on the case."
+        )
 
-    if len(parts) == 2:
-        updated_sub = sub_model.model_copy(update={parts[1]: value})
-    else:
-        # Deeper nesting (unlikely but supported)
-        updated_sub = sub_model.model_copy(update={parts[1]: value})
-
-    return case.model_copy(update={top_key: updated_sub})
+    # Rebuild the chain bottom-up: leaf first, then each enclosing model.
+    updated = leaf_parent.model_copy(update={parts[-1]: value})
+    for parent, part in zip(reversed(chain[:-1]), reversed(parts[:-1])):
+        updated = parent.model_copy(update={part: updated})
+    return updated
 
 
 def _get_nested_attr(case: AnalysisCase, path: str) -> Any:
@@ -314,10 +343,19 @@ def _default_progress(case_name: str, completed: int, total: int) -> None:
 # ---------------------------------------------------------------------------
 
 def load_study(path: str | Path) -> StudyConfig:
-    """Load a parametric study definition from YAML."""
+    """Load a parametric study definition from YAML.
+
+    Like [load_case][feaweld.pipeline.workflow.load_case], records the
+    YAML file's directory on ``base_case._base_dir`` so relative paths
+    (e.g. ``fatigue.history_file``) resolve against the study file, not
+    the process cwd.  ``model_copy`` preserves the private attribute, so
+    every swept case inherits it.
+    """
     with open(path) as f:
         data = yaml.safe_load(f)
-    return StudyConfig(**data)
+    config = StudyConfig(**data)
+    config.base_case._base_dir = str(Path(path).resolve().parent)
+    return config
 
 
 def save_study(config: StudyConfig, path: str | Path) -> None:

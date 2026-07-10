@@ -10,14 +10,28 @@ python examples/<name>.py
 
 ## YAML cases
 
-The `examples/` directory also ships two declarative cases driven by the CLI
+The `examples/` directory also ships four declarative cases driven by the CLI
 rather than Python (see `examples/README.md` for details):
 
 - **`fillet_t_joint.yaml`** — a single fillet T-joint analysis mirroring the
   [quickstart](../quickstart.md). Run it with `feaweld run examples/fillet_t_joint.yaml`.
+- **`fillet_t_joint_3d.yaml`** — the same joint extruded into a solid
+  (`geometry.dimension: 3`, 40 mm weld length): coarse TET4 mesh with toe-line
+  refinement, per-station hot spot along each weld-toe line, and an `R = 0.1`
+  `fatigue:` block on top. Walked through in the
+  [3D analysis guide](analysis_3d.md). Run it with
+  `feaweld run examples/fillet_t_joint_3d.yaml` — meshing alone works on the
+  core install; the solve needs a backend (FEniCS requires `element_order: 1`
+  in 3D).
 - **`leg_sweep_study.yaml`** — the weld-leg-size parametric study from the
   [parametric study tutorial](../tutorials/02_parametric_study.md). Run it with
   `feaweld study run examples/leg_sweep_study.yaml -j 4`.
+- **`spectrum_fatigue.yaml`** — a butt weld under the variable-amplitude stress
+  history in `load_history.csv`: rainflow + Miner damage on the EC3 category-90
+  curve with Goodman mean-stress correction and a PWHT-relaxed residual stress.
+  Walked through in the [fatigue assessment guide](fatigue_assessment.md). Run it
+  with `feaweld run examples/spectrum_fatigue.yaml`, or assess the history alone
+  (no FEA backend) with `feaweld fatigue --history examples/load_history.csv -c EC3_90`.
 
 ## Fatigue and structural
 
@@ -41,7 +55,7 @@ Monte Carlo fatigue assessment with Latin Hypercube Sampling. Treats weld leg si
 
 ### `thermal_goldak.py`
 
-Transient thermal solve with a Goldak double-ellipsoid heat source traveling along a weld path. Extracts peak temperature history and cooling rate.
+Samples the volumetric heat input of a traveling Goldak double-ellipsoid heat source on a regular grid and reports the peak power density and its location at a snapshot time. No transient solve — this is the source field the transient thermal solver integrates.
 
 ### `creep_norton_bailey.py`
 
@@ -51,7 +65,7 @@ Norton-Bailey creep relaxation during PWHT. Evolves residual stress from post-we
 
 ### `ml_fatigue_predictor.py`
 
-Trains an XGBoost / Random Forest fatigue-life predictor on the bundled IIW/DNV S-N dataset and predicts remaining life on a held-out case.
+Trains a Random Forest fatigue-life predictor on synthetic FAT90-class data generated in-script with realistic scatter, reports the cross-validation RMSE / R², then predicts fatigue life for a new case and prints the top feature importances.
 
 ### `digital_twin_update.py`
 

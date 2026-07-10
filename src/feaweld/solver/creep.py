@@ -7,7 +7,7 @@ from numpy.typing import NDArray
 
 from feaweld.core.materials import Material
 from feaweld.core.loads import PWHTSchedule
-from feaweld.core.types import FEAResults, StressField
+from feaweld.core.types import ElementType, FEAResults, FEMesh, StressField
 
 
 def norton_bailey_rate(
@@ -258,6 +258,64 @@ def simulate_creep_relaxation(
             },
         },
     )
+
+
+def pwht_relaxation_factor(
+    material: Material,
+    schedule: PWHTSchedule,
+    initial_stress: float,
+    dt: float = 60.0,
+) -> float:
+    """Scalar PWHT relaxation factor from a single-element probe.
+
+    Builds a minimal uniaxial single-tetrahedron stress state at
+    *initial_stress*, runs
+    [simulate_pwht][feaweld.solver.creep.simulate_pwht] on it, and
+    returns the ratio of relaxed to initial von Mises stress.  Used to
+    relax a scalar residual stress estimate without a full residual
+    stress field.
+
+    Parameters
+    ----------
+    material : Material
+        Material with creep parameters; with ``creep_A == 0`` the
+        factor is exactly 1.0.
+    schedule : PWHTSchedule
+        PWHT temperature-time schedule.
+    initial_stress : float
+        Uniaxial stress magnitude before PWHT (MPa); the sign is
+        ignored.  A zero stress yields a factor of 1.0.
+    dt : float
+        Time step (s) for the creep integration.
+
+    Returns
+    -------
+    float
+        Relaxation factor in (0, 1]; multiply the initial stress by it
+        to obtain the post-PWHT value.
+    """
+    initial_vm = abs(float(initial_stress))
+    if initial_vm <= 0.0:
+        return 1.0
+
+    nodes = np.array([
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, 1.0],
+    ])
+    mesh = FEMesh(
+        nodes=nodes,
+        elements=np.array([[0, 1, 2, 3]]),
+        element_type=ElementType.TET4,
+    )
+    stress = np.zeros((4, 6))
+    stress[:, 0] = initial_vm
+    probe = FEAResults(mesh=mesh, stress=StressField(values=stress))
+
+    relaxed = simulate_pwht(probe, material, schedule, dt=dt)
+    factor = float(relaxed.stress.von_mises[0]) / initial_vm
+    return min(max(factor, 0.0), 1.0)
 
 
 def simulate_pwht(

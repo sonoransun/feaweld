@@ -1,7 +1,7 @@
 """Fatigue-specific 2D plots and animations.
 
-Covers rainflow cycle histograms, damage-weighted S-N overlays, and the
-damage-evolution animation. Consumes outputs of
+Covers rainflow cycle histograms, damage-weighted S-N overlays, the Haigh
+mean-stress diagram, and the damage-evolution animation. Consumes outputs of
 [feaweld.fatigue.rainflow.rainflow_count][],
 [feaweld.fatigue.sn_curves][], and
 [feaweld.fatigue.miner][].
@@ -250,6 +250,137 @@ def plot_sn_damage_stacked(
     ax.legend(lines, labels, loc="upper right")
 
     ax.set_title(title or "Rainflow cycles vs. S-N allowable")
+    fig.tight_layout()
+    if show:
+        plt.show()
+    return fig
+
+
+# ---------------------------------------------------------------------------
+# Haigh (mean stress) diagram
+# ---------------------------------------------------------------------------
+
+
+def plot_haigh_diagram(
+    cycles: RainflowCycles,
+    sigma_u: float,
+    *,
+    correction: Literal["goodman", "gerber"] = "goodman",
+    sigma_y: float | None = None,
+    show: bool = True,
+    ax: Any = None,
+):
+    """Plot rainflow cycles on a Haigh (mean stress vs. amplitude) diagram.
+
+    Each cycle is a marker at $(\\sigma_m, \\sigma_a)$ sized by its
+    count. The constant-life envelope through the most damaging cycle —
+    the locus of $(\\sigma_m, \\sigma_a)$ with the same equivalent fully
+    reversed amplitude under the active *correction* — is drawn for both
+    the Goodman line and the Gerber parabola, with the active one
+    highlighted and its safe region shaded. With *sigma_y* given, the
+    first-yield line $\\sigma_a + \\sigma_m = \\sigma_y$ is added.
+
+    Parameters
+    ----------
+    cycles : list of (range, mean, count)
+        Output of [feaweld.fatigue.rainflow.rainflow_count][].
+    sigma_u : float
+        Ultimate tensile strength (MPa) — the mean-stress-axis intercept
+        of the Goodman line and Gerber parabola.
+    correction : {"goodman", "gerber"}
+        Mean-stress correction to highlight.
+    sigma_y : float, optional
+        Yield strength (MPa); adds the first-yield line when given.
+    show : bool
+        If ``True`` (default), call ``plt.show()``.
+    ax : matplotlib Axes, optional
+        Existing Axes to draw on. A new Figure is created when ``None``.
+
+    Returns
+    -------
+    matplotlib.figure.Figure
+        The Figure owning ``ax``.
+    """
+    from feaweld.visualization.theme import (
+        apply_feaweld_style, FEAWELD_BLUE, FEAWELD_GRAY, FEAWELD_GREEN,
+        FEAWELD_ORANGE, FEAWELD_RED,
+    )
+
+    plt = _require_matplotlib()
+    apply_feaweld_style()
+
+    if correction not in ("goodman", "gerber"):
+        raise ValueError(
+            f"Unknown correction {correction!r}. Use 'goodman' or 'gerber'."
+        )
+    if sigma_u <= 0.0:
+        raise ValueError("sigma_u must be positive.")
+
+    ranges, means, counts = _unpack_cycles(cycles)
+
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(8, 5))
+    else:
+        fig = ax.figure
+
+    if len(ranges) == 0:
+        ax.text(0.5, 0.5, "no cycles", transform=ax.transAxes,
+                ha="center", va="center")
+        ax.set_xticks([]); ax.set_yticks([])
+        ax.set_title(f"Haigh diagram ({correction})")
+        return fig
+
+    amplitudes = 0.5 * ranges
+
+    # Equivalent fully reversed amplitude of each cycle under the active
+    # correction; the envelope passes through the most damaging cycle.
+    # The denominator is floored so a mean at/beyond sigma_u cannot blow
+    # up the plot scale.
+    m_ratio = means / sigma_u
+    if correction == "goodman":
+        denom = 1.0 - m_ratio
+    else:
+        denom = 1.0 - m_ratio ** 2
+    sigma_ar = float(np.max(amplitudes / np.maximum(denom, 0.05)))
+
+    sm = np.linspace(0.0, sigma_u, 200)
+    envelopes = (
+        ("Goodman", sigma_ar * (1.0 - sm / sigma_u)),
+        ("Gerber", sigma_ar * (1.0 - (sm / sigma_u) ** 2)),
+    )
+    for name, env in envelopes:
+        active = name.lower() == correction
+        ax.plot(
+            sm, env,
+            color=FEAWELD_RED if active else FEAWELD_GRAY,
+            linewidth=2.2 if active else 1.2,
+            alpha=1.0 if active else 0.55,
+            linestyle="-" if active else "--",
+            label=f"{name} envelope" + (" (active)" if active else ""),
+        )
+        if active:
+            ax.fill_between(sm, 0.0, env, color=FEAWELD_GREEN, alpha=0.12,
+                            label="Safe region")
+
+    if sigma_y is not None:
+        sm_y = np.linspace(0.0, sigma_y, 2)
+        ax.plot(sm_y, sigma_y - sm_y, color=FEAWELD_ORANGE, linewidth=1.4,
+                linestyle="-.",
+                label=f"First yield (σ_y = {sigma_y:.0f} MPa)")
+
+    sizes = 25.0 + 75.0 * counts / max(float(counts.max()), 1e-12)
+    ax.scatter(means, amplitudes, s=sizes, color=FEAWELD_BLUE, alpha=0.75,
+               edgecolors="black", linewidths=0.4, zorder=3,
+               label="Rainflow cycles")
+
+    ax.set_xlabel("Mean stress σ_m (MPa)")
+    ax.set_ylabel("Stress amplitude σ_a (MPa)")
+    ax.set_xlim(min(0.0, float(means.min()) * 1.1), sigma_u * 1.02)
+    ax.set_ylim(0.0, max(sigma_ar, float(amplitudes.max())) * 1.15)
+    ax.grid(True, alpha=0.3)
+    ax.legend(loc="upper right", fontsize=9)
+
+    ax.set_title(f"Haigh diagram ({correction})")
     fig.tight_layout()
     if show:
         plt.show()

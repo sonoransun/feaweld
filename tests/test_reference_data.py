@@ -256,6 +256,133 @@ class TestResidualStress:
         profiles = list_residual_profiles()
         assert len(profiles) >= 4
 
+    def test_surface_residual_stress(self):
+        from feaweld.data.residual_stress import (
+            evaluate_residual_stress, surface_residual_stress,
+        )
+        expected = evaluate_residual_stress("BS7910_Level2_butt", 0.0, 250.0)
+        assert surface_residual_stress("BS7910_Level2_butt", 250.0) == \
+            pytest.approx(expected)
+        # Level 1 is uniform sigma_y, so the surface is sigma_y too.
+        assert surface_residual_stress("BS7910_Level1", 250.0) == \
+            pytest.approx(250.0, rel=0.05)
+
+    def test_residual_stress_field_shape_and_mapping(self, simple_plate_mesh):
+        from feaweld.data.residual_stress import (
+            evaluate_residual_stress, residual_stress_field,
+        )
+        field = residual_stress_field(
+            "BS7910_Level2_butt", simple_plate_mesh, 10.0, 250.0,
+        )
+        assert field.shape == (simple_plate_mesh.n_nodes, 6)
+        # Only the requested Voigt component is populated.
+        assert np.allclose(np.delete(field, 1, axis=1), 0.0)
+
+        # Top surface (max y) maps to z/t = 0, bottom to z/t = 1.
+        y = simple_plate_mesh.nodes[:, 1]
+        top = evaluate_residual_stress("BS7910_Level2_butt", 0.0, 250.0)
+        bottom = evaluate_residual_stress("BS7910_Level2_butt", 1.0, 250.0)
+        np.testing.assert_allclose(field[y == 10.0, 1], top)
+        np.testing.assert_allclose(field[y == 0.0, 1], bottom)
+
+    def test_residual_stress_field_mid_thickness(self, simple_plate_mesh):
+        from feaweld.data.residual_stress import (
+            evaluate_residual_stress, residual_stress_field,
+        )
+        # Thickness 20 with a 10-deep mesh puts the y = 0 nodes at z/t = 0.5.
+        field = residual_stress_field(
+            "BS7910_Level2_butt", simple_plate_mesh, 20.0, 250.0,
+        )
+        mid = evaluate_residual_stress("BS7910_Level2_butt", 0.5, 250.0)
+        y = simple_plate_mesh.nodes[:, 1]
+        np.testing.assert_allclose(field[y == 0.0, 1], mid)
+        # Surface differs from mid-thickness for this profile.
+        surface = evaluate_residual_stress("BS7910_Level2_butt", 0.0, 250.0)
+        assert not np.isclose(mid, surface)
+
+    def test_residual_stress_field_clamps_depth(self, simple_plate_mesh):
+        from feaweld.data.residual_stress import (
+            evaluate_residual_stress, residual_stress_field,
+        )
+        # Thickness 5 with a 10-deep mesh: the deep nodes clamp to z/t = 1.
+        field = residual_stress_field(
+            "BS7910_Level2_butt", simple_plate_mesh, 5.0, 250.0,
+        )
+        deep = evaluate_residual_stress("BS7910_Level2_butt", 1.0, 250.0)
+        y = simple_plate_mesh.nodes[:, 1]
+        np.testing.assert_allclose(field[y == 0.0, 1], deep)
+
+    def test_residual_stress_field_bad_thickness(self, simple_plate_mesh):
+        from feaweld.data.residual_stress import residual_stress_field
+        with pytest.raises(ValueError, match="thickness"):
+            residual_stress_field(
+                "BS7910_Level2_butt", simple_plate_mesh, 0.0, 250.0,
+            )
+
+    @staticmethod
+    def _fillet_t_mesh():
+        """A fillet-T-shaped node layout: base plate (t = 20) plus a web.
+
+        Base plate nodes span y in [0, 20]; the web rises above the plate
+        surface to a free top edge at y = 120.
+        """
+        from feaweld.core.types import ElementType, FEMesh
+        nodes = np.array([
+            [0.0, 0.0, 0.0],      # plate deep side (z/t = 1)
+            [0.0, 10.0, 0.0],     # plate mid-thickness (z/t = 0.5)
+            [50.0, 20.0, 0.0],    # plate surface / weld toe (z/t = 0)
+            [60.0, 70.0, 0.0],    # web node above the plate
+            [60.0, 120.0, 0.0],   # web free top edge
+        ])
+        elements = np.array([[0, 1, 2], [2, 3, 4]], dtype=np.int64)
+        return FEMesh(nodes=nodes, elements=elements,
+                      element_type=ElementType.TRI3)
+
+    def test_residual_stress_field_surface_coordinate_fillet(self):
+        """Regression: the profile anchors at the welded plate's surface.
+
+        The legacy coords.max() anchor measured depth from the web's free
+        top edge, so the weld-toe node got the clamped z/t = 1 value
+        (137.5 MPa for BS7910_Level2_fillet at sigma_y = 250) instead of
+        the 250 MPa surface value, and the web carried the peak residual.
+        """
+        from feaweld.data.residual_stress import (
+            evaluate_residual_stress, residual_stress_field,
+        )
+        mesh = self._fillet_t_mesh()
+        field = residual_stress_field(
+            "BS7910_Level2_fillet", mesh, 20.0, 250.0,
+            surface_coordinate=20.0,
+        )
+        # Weld-toe surface node gets the full z/t = 0 value.
+        assert field[2, 1] == pytest.approx(250.0)
+        # Mid-plate and deep-side nodes follow the profile.
+        assert field[1, 1] == pytest.approx(
+            evaluate_residual_stress("BS7910_Level2_fillet", 0.5, 250.0)
+        )
+        assert field[0, 1] == pytest.approx(
+            evaluate_residual_stress("BS7910_Level2_fillet", 1.0, 250.0)
+        )
+        # Web nodes above the plate band carry zero residual.
+        assert field[3, 1] == 0.0
+        assert field[4, 1] == 0.0
+
+    def test_residual_stress_field_legacy_max_anchor(self):
+        """surface_coordinate=None keeps the legacy coords.max() anchor
+        (appropriate for meshes that consist of the plate alone)."""
+        from feaweld.data.residual_stress import (
+            evaluate_residual_stress, residual_stress_field,
+        )
+        mesh = self._fillet_t_mesh()
+        field = residual_stress_field(
+            "BS7910_Level2_fillet", mesh, 20.0, 250.0,
+        )
+        # Anchored at the web top (y = 120): the web free edge gets the
+        # surface value and the whole plate clamps to z/t = 1.
+        assert field[4, 1] == pytest.approx(250.0)
+        deep = evaluate_residual_stress("BS7910_Level2_fillet", 1.0, 250.0)
+        np.testing.assert_allclose(field[:3, 1], deep)
+
 
 # ---------------------------------------------------------------------------
 # Tests: Filler Metals

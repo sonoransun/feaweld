@@ -81,6 +81,19 @@ The `elastoplastic`, `thermomechanical`, `creep`, and PWHT paths are built *on t
 of* these four methods in dedicated modules (`solver/mechanical.py`,
 `solver/thermomechanical.py`, `solver/creep.py`), so they work with either backend.
 
+## 3D support
+
+Backend selection is unchanged for extruded (`geometry.dimension: 3`) cases —
+the diagram above applies as-is — but element support differs per backend:
+
+| Backend | TET4 (`element_order: 1`) | TET10 (`element_order: 2`) |
+|---------|---------------------------|----------------------------|
+| FEniCSx | ✓ supported | ✗ `NotImplementedError` — use `element_order: 1` or CalculiX |
+| CalculiX | ✓ C3D4 deck generation | ✓ C3D10 deck generation (gmsh → ccx node reordering applied); not yet numerically validated against a live `ccx` run |
+
+See the [3D analysis guide](analysis_3d.md#solver-support-in-3d) for details,
+mesh-sizing guidance, and the shipped 3D example.
+
 ## Elastoplastic: an honest caveat
 
 !!! warning "`elastoplastic` is a stress post-correction, not a nonlinear FE solve"
@@ -176,11 +189,13 @@ solver:
   creep_temperature: 550.0
   creep_time_hours: 100.0
 material:
-  base_metal: A387_Gr91   # must define creep_A / creep_n / creep_m
+  base_metal: A387_22     # must define creep_A / creep_n / creep_m
 ```
 
 ## See also
 
+- [3D analysis](analysis_3d.md) — extruded joints, tet meshing, and per-station
+  hot spot along the weld toe.
 - [Loads & boundary conditions](loads_and_bcs.md) — how each `load` field becomes
   a nodal force, pressure, or temperature BC.
 - [PWHT](pwht.md) — post-weld heat treatment stress relaxation.

@@ -147,6 +147,75 @@ class TestMaterialPlots:
 
 
 # ---------------------------------------------------------------------------
+# Fatigue plots: Haigh (mean stress) diagram
+# ---------------------------------------------------------------------------
+
+def _haigh_cycles():
+    return [
+        (50.0, 10.0, 1.0),
+        (80.0, 20.0, 1.0),
+        (120.0, 30.0, 0.5),
+        (60.0, 15.0, 1.0),
+        (100.0, 25.0, 1.0),
+    ]
+
+
+class TestHaighDiagram:
+    def test_goodman(self):
+        from feaweld.visualization.fatigue_plots import plot_haigh_diagram
+        fig = plot_haigh_diagram(
+            _haigh_cycles(), 400.0, correction="goodman", show=False,
+        )
+        assert isinstance(fig, plt.Figure)
+
+    def test_gerber_with_yield_line(self):
+        from feaweld.visualization.fatigue_plots import plot_haigh_diagram
+        fig = plot_haigh_diagram(
+            _haigh_cycles(), 400.0, correction="gerber", sigma_y=250.0,
+            show=False,
+        )
+        labels = [line.get_label() for line in fig.axes[0].lines]
+        assert any("Gerber" in lab and "active" in lab for lab in labels)
+        assert any("yield" in lab for lab in labels)
+
+    def test_goodman_envelope_through_worst_cycle(self):
+        from feaweld.visualization.fatigue_plots import plot_haigh_diagram
+        sigma_u = 400.0
+        cycles = _haigh_cycles()
+        fig = plot_haigh_diagram(
+            cycles, sigma_u, correction="goodman", show=False,
+        )
+        active = next(
+            line for line in fig.axes[0].lines if "active" in line.get_label()
+        )
+        # Amplitude-axis intercept is the equivalent fully reversed
+        # amplitude of the most damaging cycle: sigma_a / (1 - sigma_m/sigma_u).
+        expected = max(
+            0.5 * rng / (1.0 - mean / sigma_u) for rng, mean, _cnt in cycles
+        )
+        assert active.get_ydata()[0] == pytest.approx(expected, rel=1e-9)
+        # ...and the envelope reaches zero amplitude at sigma_u.
+        assert active.get_xdata()[-1] == pytest.approx(sigma_u)
+        assert active.get_ydata()[-1] == pytest.approx(0.0, abs=1e-9)
+
+    def test_empty_cycles(self):
+        from feaweld.visualization.fatigue_plots import plot_haigh_diagram
+        fig = plot_haigh_diagram([], 400.0, show=False)
+        assert isinstance(fig, plt.Figure)
+
+    def test_invalid_correction_raises(self):
+        from feaweld.visualization.fatigue_plots import plot_haigh_diagram
+        with pytest.raises(ValueError):
+            plot_haigh_diagram(_haigh_cycles(), 400.0, correction="soderberg",
+                               show=False)
+
+    def test_nonpositive_sigma_u_raises(self):
+        from feaweld.visualization.fatigue_plots import plot_haigh_diagram
+        with pytest.raises(ValueError):
+            plot_haigh_diagram(_haigh_cycles(), 0.0, show=False)
+
+
+# ---------------------------------------------------------------------------
 # Thermal history plot
 # ---------------------------------------------------------------------------
 

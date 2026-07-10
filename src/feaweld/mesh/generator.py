@@ -87,7 +87,7 @@ def generate_mesh(
     joint: JointGeometry,
     config: WeldMeshConfig | None = None,
     model_name: str = "weld_joint",
-    dim: int = 2,
+    dim: int | None = None,
     finalize: bool = True,
 ) -> FEMesh:
     """Generate a finite-element mesh for *joint*.
@@ -101,7 +101,9 @@ def generate_mesh(
     model_name:
         Gmsh model name.
     dim:
-        Mesh dimension (2 or 3).
+        Mesh dimension (2 or 3).  With *None* (the default) the dimension
+        is inferred from ``joint.dimension``; an explicit value that
+        contradicts the joint raises ``ValueError``.
     finalize:
         If *True*, call ``gmsh.finalize()`` when done.  Set to *False*
         if you want to keep Gmsh alive for further operations (e.g.
@@ -115,14 +117,35 @@ def generate_mesh(
     if config is None:
         config = WeldMeshConfig()
 
+    joint_dim = int(getattr(joint, "dimension", 2))
+    if dim is None:
+        dim = joint_dim
+    elif dim != joint_dim:
+        raise ValueError(
+            f"Requested mesh dim={dim} contradicts joint.dimension="
+            f"{joint_dim}; build the joint with the matching 'dimension' "
+            "(or omit 'dim' to infer it from the joint)."
+        )
+
+    if dim == 3 and config.element_type_3d == "hex":
+        raise NotImplementedError(
+            "hex meshing not yet supported for extruded joints; use 'tet'"
+        )
+
     _ensure_gmsh_initialized()
 
     # 1. Build geometry
     joint.build(model_name=model_name)
 
-    # 2. Size fields for weld-toe refinement
+    # 2. Size fields for weld-toe refinement.  Extruded joints refine
+    #    around the swept toe lines rather than the section toe points.
     toe_points = joint.get_weld_toe_points()
-    _apply_size_fields(toe_points, config)
+    toe_lines = None
+    if dim == 3:
+        get_lines = getattr(joint, "get_weld_toe_lines", None)
+        if get_lines is not None:
+            toe_lines = get_lines()
+    _apply_size_fields(toe_points, config, toe_lines=toe_lines)
 
     # 3. Global meshing options
     gmsh.option.setNumber("Mesh.Algorithm", config.algorithm_2d)
@@ -131,9 +154,10 @@ def generate_mesh(
 
     gmsh.option.setNumber("Mesh.ElementOrder", config.element_order)
 
-    if config.element_type_2d == "quad":
+    if dim == 2 and config.element_type_2d == "quad":
         gmsh.option.setNumber("Mesh.RecombineAll", 1)
     else:
+        # No quad recombination on the boundary faces of a tet mesh.
         gmsh.option.setNumber("Mesh.RecombineAll", 0)
 
     # 4. Generate
@@ -168,6 +192,17 @@ def extract_mesh_from_gmsh(dim: int = 2) -> FEMesh:
 
     Must be called while a Gmsh session is active and a mesh has been
     generated.
+
+    Notes
+    -----
+    Nodes not referenced by any extracted element are dropped and the
+    connectivity and node sets are remapped to the compacted numbering.
+    The free OCC points (2D) and lines (3D) created for the weld-toe
+    ``Distance`` size fields are meshed by Gmsh into nodes that belong to
+    no solid element — along 3D toe lines they exactly duplicate every toe
+    node.  A real solver assigns those orphans zero stress, which would
+    silently corrupt every coordinate-based nearest-node sampler at the
+    weld toe.
     """
     # -- Nodes ---------------------------------------------------------------
     node_tags, node_coords, _ = gmsh.model.mesh.getNodes()
@@ -208,6 +243,11 @@ def extract_mesh_from_gmsh(dim: int = 2) -> FEMesh:
     physical_groups: dict[str, NDArray[np.int64]] = {}
     node_sets: dict[str, NDArray[np.int64]] = {}
 
+    # Sorted view of the element tags so group tags can be mapped to element
+    # indices with searchsorted instead of a per-tag linear scan.
+    tag_order = np.argsort(n_elem_tags).astype(np.int64)
+    sorted_elem_tags = n_elem_tags[tag_order]
+
     for d in range(dim + 1):
         phys = gmsh.model.getPhysicalGroups(d)
         for pdim, ptag in phys:
@@ -219,19 +259,25 @@ def extract_mesh_from_gmsh(dim: int = 2) -> FEMesh:
 
             if pdim == dim:
                 # Collect element indices belonging to this physical group
-                elem_indices: list[int] = []
+                group_tags: list[NDArray[np.int64]] = []
                 for et in ent_tags:
                     e_types, e_tags, _ = gmsh.model.mesh.getElements(pdim, et)
                     for j, etype in enumerate(e_types):
                         if int(etype) == gmsh_etype:
-                            for etag in e_tags[j]:
-                                # Find index of this element tag in n_elem_tags
-                                idx_arr = np.where(n_elem_tags == int(etag))[0]
-                                elem_indices.extend(idx_arr.tolist())
-                if elem_indices:
-                    physical_groups[name] = np.array(
-                        sorted(set(elem_indices)), dtype=np.int64
-                    )
+                            group_tags.append(
+                                np.asarray(e_tags[j], dtype=np.int64)
+                            )
+                if group_tags:
+                    tags = np.concatenate(group_tags)
+                    pos = np.searchsorted(sorted_elem_tags, tags)
+                    pos = np.minimum(pos, len(sorted_elem_tags) - 1)
+                    # Drop group tags absent from n_elem_tags (matches the
+                    # empty np.where result of the per-tag scan).
+                    valid = sorted_elem_tags[pos] == tags
+                    if np.any(valid):
+                        physical_groups[name] = np.unique(
+                            tag_order[pos[valid]]
+                        )
             else:
                 # Lower-dimensional groups -> node sets
                 ns: list[int] = []
@@ -242,6 +288,25 @@ def extract_mesh_from_gmsh(dim: int = 2) -> FEMesh:
                     node_sets[name] = np.array(
                         sorted(set(ns)), dtype=np.int64
                     )
+
+    # -- Drop orphan nodes ----------------------------------------------------
+    # Only nodes referenced by the extracted connectivity are kept (element
+    # indices in *physical_groups* are unaffected).  np.unique returns the
+    # used indices sorted, so the relative node order is preserved and the
+    # remapping below is monotone — already-sorted node sets stay sorted.
+    used = np.unique(connectivity)
+    if used.size < n_nodes:
+        remap = np.full(n_nodes, -1, dtype=np.int64)
+        remap[used] = np.arange(used.size, dtype=np.int64)
+        coords = coords[used]
+        connectivity = remap[connectivity]
+        filtered_sets: dict[str, NDArray[np.int64]] = {}
+        for name, ids in node_sets.items():
+            mapped = remap[ids]
+            mapped = mapped[mapped >= 0]
+            if mapped.size:
+                filtered_sets[name] = mapped
+        node_sets = filtered_sets
 
     return FEMesh(
         nodes=coords,
@@ -263,10 +328,13 @@ def _attach_weld_toe_node_set(
     """Map a joint's weld-toe coordinates to their nearest mesh nodes.
 
     Post-processing methods locate the weld toe through the ``"weld_toe"``
-    node set, but Gmsh physical groups only tag ``bottom``/``top``
-    boundaries.  Each analytic toe point is matched to its nearest mesh node
-    via a k-d tree; the resulting node indices are de-duplicated and stored
-    as an ``int64`` array on ``mesh.node_sets["weld_toe"]``.
+    node set.  For 2D sections Gmsh physical groups only tag
+    ``bottom``/``top`` boundaries, so each analytic toe point is matched to
+    its nearest mesh node via a k-d tree; the resulting node indices are
+    de-duplicated and stored as an ``int64`` array on
+    ``mesh.node_sets["weld_toe"]``.  Extruded 3D joints register toe-edge
+    physical groups directly — a ``"weld_toe"`` set already extracted from
+    those groups is kept as-is.
 
     Parameters
     ----------
@@ -276,6 +344,9 @@ def _attach_weld_toe_node_set(
         Weld-toe coordinates from ``JointGeometry.get_weld_toe_points()``.
         When empty (e.g. some butt configurations) the set is left absent.
     """
+    if "weld_toe" in mesh.node_sets:
+        return
+
     if not toe_points:
         return
 
@@ -298,23 +369,30 @@ def _attach_weld_toe_node_set(
 def _apply_size_fields(
     toe_points: list[tuple[float, float, float]],
     config: WeldMeshConfig,
+    toe_lines: list[
+        tuple[tuple[float, float, float], tuple[float, float, float]]
+    ] | None = None,
 ) -> None:
-    """Set up Gmsh mesh size fields for weld-toe refinement."""
-    if not toe_points:
+    """Set up Gmsh mesh size fields for weld-toe refinement.
+
+    In 2D each analytic toe point becomes a free OCC point feeding a
+    ``Distance`` field.  For extruded 3D joints *toe_lines* provides the
+    swept toe segments instead: each becomes a free OCC line whose
+    ``Distance`` field is sampled finely enough to resolve
+    ``weld_toe_size`` along its length.  The Threshold/Min combination is
+    identical for both source kinds.
+    """
+    if toe_lines:
+        dist_ids = _distance_fields_from_lines(toe_lines, config)
+    elif toe_points:
+        dist_ids = _distance_fields_from_points(toe_points)
+    else:
         gmsh.option.setNumber("Mesh.CharacteristicLengthMax", config.global_size)
         return
 
     field_ids: list[int] = []
 
-    for px, py, pz in toe_points:
-        # Point source for Distance field
-        pt_tag = gmsh.model.occ.addPoint(px, py, pz)
-        gmsh.model.occ.synchronize()
-
-        # Distance field
-        dist_id = gmsh.model.mesh.field.add("Distance")
-        gmsh.model.mesh.field.setNumbers(dist_id, "PointsList", [pt_tag])
-
+    for dist_id in dist_ids:
         # Threshold field
         thresh_id = gmsh.model.mesh.field.add("Threshold")
         gmsh.model.mesh.field.setNumber(thresh_id, "InField", dist_id)
@@ -338,3 +416,52 @@ def _apply_size_fields(
     gmsh.option.setNumber("Mesh.MeshSizeExtendFromBoundary", 0)
     gmsh.option.setNumber("Mesh.MeshSizeFromPoints", 0)
     gmsh.option.setNumber("Mesh.MeshSizeFromCurvature", 0)
+
+
+def _distance_fields_from_points(
+    toe_points: list[tuple[float, float, float]],
+) -> list[int]:
+    """One ``Distance`` field per analytic toe point (free OCC points)."""
+    dist_ids: list[int] = []
+    for px, py, pz in toe_points:
+        # Point source for Distance field
+        pt_tag = gmsh.model.occ.addPoint(px, py, pz)
+        gmsh.model.occ.synchronize()
+
+        dist_id = gmsh.model.mesh.field.add("Distance")
+        gmsh.model.mesh.field.setNumbers(dist_id, "PointsList", [pt_tag])
+        dist_ids.append(dist_id)
+    return dist_ids
+
+
+def _distance_fields_from_lines(
+    toe_lines: list[
+        tuple[tuple[float, float, float], tuple[float, float, float]]
+    ],
+    config: WeldMeshConfig,
+) -> list[int]:
+    """One ``Distance`` field per swept toe segment (free OCC lines).
+
+    Each segment is rebuilt as a free OCC line so the field does not
+    depend on the extruded model's edge tags; the field sampling density
+    scales with segment length so the refinement band stays tight at
+    ``weld_toe_size`` resolution.
+    """
+    curves: list[tuple[int, float]] = []
+    for p0, p1 in toe_lines:
+        t0 = gmsh.model.occ.addPoint(*p0)
+        t1 = gmsh.model.occ.addPoint(*p1)
+        curve = gmsh.model.occ.addLine(t0, t1)
+        length = float(np.linalg.norm(np.asarray(p1) - np.asarray(p0)))
+        curves.append((curve, length))
+    gmsh.model.occ.synchronize()
+
+    dist_ids: list[int] = []
+    for curve, length in curves:
+        dist_id = gmsh.model.mesh.field.add("Distance")
+        gmsh.model.mesh.field.setNumbers(dist_id, "CurvesList", [curve])
+        gmsh.model.mesh.field.setNumber(
+            dist_id, "Sampling", max(20, int(length / config.weld_toe_size))
+        )
+        dist_ids.append(dist_id)
+    return dist_ids

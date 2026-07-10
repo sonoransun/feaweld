@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-09
+
 ### Added
 
 **Analysis capabilities**
@@ -47,6 +49,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`FILLET_T`, `fillet_t`, and `SED` all validate); serialization still
   emits the canonical lowercase values.
 
+**Fatigue**
+- A top-level `fatigue:` block turns the one-shot check into a spectrum
+  assessment: cyclic loading as an R-ratio, multi-block spectra, an inline
+  history, or a `history_file` CSV (factor or absolute stress), rainflow-counted
+  (ASTM E1049) and Palmgren-Miner-summed in `run_analysis`.
+- New `fatigue/assessment.py` spectrum engine (`build_cycle_set`,
+  `scale_cycles`, `assess_spectrum`, `spectrum_life_power_law`); the governing
+  cycles are stashed to `postprocess_results["rainflow"]`, feeding report
+  figures and `feaweld animate`.
+- Mean-stress corrections (Goodman/Gerber, optionally including a residual
+  mean) plus IIW thickness `f(t)`, surface-roughness, and environment
+  knockdowns are applied to the spectrum ranges.
+- Methods that mandate their own S-N curve are assessed on it: effective notch
+  on FAT225 (with corrections), Dong and SED power-law-scaled.
+- New `feaweld fatigue` CLI: standalone spectrum assessment from a CSV history
+  or a constant-amplitude cycle, with corrections, a residual profile, and
+  `--list-curves`.
+
+**S-N standards**
+- Eurocode 3 EN 1993-1-9: 14 detail categories, two-slope (m = 3/5), CAFL at
+  5e6, cutoff at 1e8 (`ec3_curve`).
+- BS 7608: 8 classes with mean and design (mean − 2SD) curves and a Haibach
+  knee at 1e7 (`bs7608_curve`).
+- AWS D1.1: 7 categories A–E′ (including primed aliases) with a CAFL threshold
+  (`aws_curve`).
+- `SNStandard` gains `EC3`/`BS7608`/`AWS` members, `get_sn_curve` dispatches to
+  them, and the spec grammar accepts `EC3_90` / `BS7608_F2` / `AWS_C`; each
+  ships a bundled S-N data file.
+
+**Residual stress**
+- Residual stress enters fatigue as a mean-stress shift from a bundled profile,
+  a fixed value, or the as-welded yield; an optional `superimpose` adds the
+  through-thickness field (new `residual_stress_field` /
+  `surface_residual_stress`, plate-surface anchored) to the saved stress output.
+- PWHT now relaxes the residual field via a Norton-Bailey probe (new
+  `solver.creep.pwht_relaxation_factor`) when a residual profile is configured.
+
+**3D analysis**
+- `geometry.dimension: 3` extrudes all five joint types along `length`
+  (template-method refactor with volume/face/toe-edge physical groups and a
+  `get_weld_toe_lines` / `get_weld_toe_normals` API).
+- Tetrahedral 3D meshing with toe-line Distance refinement (`element_type_3d`,
+  `refinement_distance`; hex guarded); hot-spot stress is evaluated per station
+  along each weld toe line with `critical_line` / `n_stations` reporting and
+  unresolved-station exclusion.
+- Linearization, nominal, notch, SED, and Blodgett run in 3D; `structural_dong`
+  and the singularity check are 2D-only (informative guard / auto-skip).
+- FEniCSx 3D linear-tet solves (TET10 guarded) and CalculiX C3D4/C3D10 with the
+  Gmsh → ccx TET10 mid-edge node permutation.
+
+**Configuration**
+- Butt-weld `groove_angle`, `root_gap`, and `penetration` (validated
+  `full`/`partial`) are exposed in `GeometryConfig`.
+- `PostProcessConfig.weld_efficiency` (a lookup name or a direct value) scales
+  all four ASME allowable checks.
+
 **Visualization & reporting**
 - HTML reports now embed 3D PyVista renderings (stress contour, deformed shape,
   mesh preview, temperature field) plus spatial 2D contours, through-thickness
@@ -81,6 +139,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Shipped runnable example YAMLs (`examples/fillet_t_joint.yaml`,
   `examples/leg_sweep_study.yaml`) and `examples/README.md`.
 - CONTRIBUTING guide and this changelog.
+- Two new guides (fatigue assessment, 3D analysis) and an `api/data.md` page;
+  six new concept figures and three new report figures (rainflow matrix, damage
+  per block, Haigh diagram); three new examples (`spectrum_fatigue.yaml`,
+  `load_history.csv`, `fillet_t_joint_3d.yaml`); Python 3.14 classifier.
 
 ### Changed
 - Docstrings standardized to numpy style across the codebase (matching the
@@ -93,6 +155,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   scatter by default (the `include_geometric_tolerance` flag was previously
   parsed but ignored), so mean/cov values shift accordingly.
 - `pyproject.toml` metadata: authors, keywords, classifiers, project URLs.
+- Residual stress `superimpose` adds the through-thickness field to the saved
+  stress output only, after post-processing — never into the fatigue ranges.
+- PWHT relaxes the residual-stress field rather than the load field when a
+  residual profile is configured (the legacy load-field path is preserved with
+  a warning otherwise).
+- Study parameter sweeps now walk nested attribute paths of any depth and raise
+  on an invalid path (deeper-than-two-level paths were previously dropped
+  silently); `load_study` sets the study `_base_dir`.
 
 ### Fixed
 - Meshes now carry a `weld_toe` node set (nearest nodes to the joint's
@@ -147,6 +217,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not exist (`reliability`, `training`); README and quickstart referenced
   example YAML files that were not shipped; the quickstart study snippet used
   an invalid `base_case: <path>` form.
+- `examples/butt_weld_fatigue.py` imported a nonexistent
+  `fatigue_life_from_damage`; the helper now exists in `fatigue/miner.py`.
+- Orphan duplicate nodes left by Distance-field construction (2D free points and
+  3D toe lines) are filtered out in `extract_mesh_from_gmsh`.
+- The O(n_group × n_elem) physical-group-to-element mapping is vectorized.
+- Hot-spot extrapolation no longer assumes sorted weld-tangent node ids and
+  signs the surface direction away from the weld, with snapping diagnostics.
+- Documentation corrections: IIW detail count 80 → 100, the DNV category count,
+  `--clip` usage, image paths, the nonexistent `A387_Gr91` material, the notch
+  nominal-fallback description, stale index metrics, and a missing `api/data.md`
+  page.
 
 ### Removed
 - `docs/VISUALIZATION_GUIDE.md` (byte-identical orphan duplicate of

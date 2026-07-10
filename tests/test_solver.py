@@ -706,6 +706,56 @@ class TestInpGeneration:
         assert "*HEAT TRANSFER, STEADY STATE" in content
         assert "*CONDUCTIVITY" in content
 
+    def test_tet10_connectivity_permuted(self, tmp_path):
+        """Gmsh TET10 connectivity is written in CalculiX C3D10 node order.
+
+        Gmsh places the last two mid-edge nodes on edges (2,3) then (1,3);
+        Abaqus/CalculiX C3D10 expects (1,3) then (2,3), so the last two
+        entries of each element line must swap.
+        """
+        from feaweld.solver.calculix_backend import generate_inp
+
+        # Unit tet vertices plus the six edge midpoints in gmsh order:
+        # (0,1),(1,2),(2,0),(0,3),(2,3),(1,3).
+        v = np.array([
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ])
+        mid_edges = [(0, 1), (1, 2), (2, 0), (0, 3), (2, 3), (1, 3)]
+        nodes = np.vstack([v] + [0.5 * (v[i] + v[j]) for i, j in mid_edges])
+        mesh = FEMesh(
+            nodes=nodes,
+            elements=np.array([[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]]),
+            element_type=ElementType.TET10,
+        )
+
+        inp_path = generate_inp(
+            mesh=mesh, material=_make_material(), load_case=LoadCase(name="t"),
+            path=tmp_path / "tet10.inp", analysis="static",
+        )
+
+        lines = inp_path.read_text().splitlines()
+        header = lines.index("*ELEMENT, TYPE=C3D10, ELSET=ALL")
+        # 1-based ids: gmsh nodes 9 and 10 swap for CalculiX
+        assert lines[header + 1] == "1, 1, 2, 3, 4, 5, 6, 7, 8, 10, 9"
+
+    def test_tet4_connectivity_unchanged(self, simple_3d_mesh, tmp_path):
+        """Linear tets need no permutation: connectivity passes through."""
+        from feaweld.solver.calculix_backend import generate_inp
+
+        inp_path = generate_inp(
+            mesh=simple_3d_mesh, material=_make_material(),
+            load_case=LoadCase(name="t"),
+            path=tmp_path / "tet4.inp", analysis="static",
+        )
+
+        lines = inp_path.read_text().splitlines()
+        header = lines.index("*ELEMENT, TYPE=C3D4, ELSET=ALL")
+        assert lines[header + 1] == "1, 1, 2, 3, 4"
+        assert lines[header + 2] == "2, 1, 2, 4, 5"
+
 
 # ---------------------------------------------------------------------------
 # Tests: .frd parser

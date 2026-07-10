@@ -96,7 +96,19 @@ def create_notched_model(
         Fictitious notch radius (mm).
     model_name:
         Gmsh model name.
+
+    Raises
+    ------
+    NotImplementedError
+        If the joint was configured with ``dimension == 3``: notch rounding
+        operates on the 2D cross-section only.
     """
+    if getattr(joint, "dimension", 2) == 3:
+        raise NotImplementedError(
+            "Effective notch rounding is only supported for 2D cross-sections; "
+            "build the joint with dimension=2 (got dimension=3)."
+        )
+
     _ensure_gmsh_initialized()
 
     # Step 1 -- build the parametric joint geometry

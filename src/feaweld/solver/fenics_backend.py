@@ -73,6 +73,13 @@ def _femesh_to_dolfinx(mesh: FEMesh) -> Any:
 
     cell_type, degree = cell_map[mesh.element_type]
 
+    if degree == 2 and mesh.element_type in (ElementType.TET10, ElementType.HEX20):
+        raise NotImplementedError(
+            f"3D second-order cells ({mesh.element_type.value}) are not yet "
+            "supported by the FEniCS backend (gmsh/basix mid-node ordering "
+            "unverified); use element_order=1 or the CalculiX backend."
+        )
+
     # Ensure 3D coordinates
     coords = mesh.nodes
     if coords.shape[1] == 2:

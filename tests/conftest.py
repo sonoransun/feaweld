@@ -331,3 +331,71 @@ def grid_plate_mesh():
         element_type=ElementType.TRI3,
         node_sets={"bottom": bottom, "top": top, "weld_toe": weld_toe},
     )
+
+
+@pytest.fixture
+def grid_solid_mesh():
+    """A structured 3D solid mesh with bottom/top/weld_toe node sets.
+
+    The block spans x in [0, 40] (width), y in [0, 20] (through-thickness),
+    and z in [0, 40] (weld direction): a 5x5x5 node grid whose 64 cells are
+    each split into 6 TET4s (Kuhn subdivision, conforming across cells).
+    ``bottom`` is the y = 0 face, ``top`` the y = 20 face, and
+    ``weld_toe`` / ``weld_toe_0`` the 5 nodes along the toe line
+    (x = 20, y = 20, z = 0..40).  A small ``"weld"`` element group on the
+    x < 20 side of the toe exercises hot-spot surface-direction sign
+    selection.
+    """
+    nx = ny = nz = 5
+    dx, dy, dz = 10.0, 5.0, 10.0
+    nodes = np.array(
+        [[i * dx, j * dy, k * dz]
+         for k in range(nz) for j in range(ny) for i in range(nx)],
+        dtype=np.float64,
+    )
+
+    def nid(i, j, k):
+        return (k * ny + j) * nx + i
+
+    # Kuhn subdivision: 6 tets per cell, one per permutation of the axis
+    # steps from the cell's low corner to its high corner.
+    perms = [(0, 1, 2), (0, 2, 1), (1, 0, 2), (1, 2, 0), (2, 0, 1), (2, 1, 0)]
+    elements = []
+    weld_elems = []
+    for k in range(nz - 1):
+        for j in range(ny - 1):
+            for i in range(nx - 1):
+                corner = {
+                    (di, dj, dk): nid(i + di, j + dj, k + dk)
+                    for di in (0, 1) for dj in (0, 1) for dk in (0, 1)
+                }
+                for perm in perms:
+                    step = [0, 0, 0]
+                    tet = [corner[(0, 0, 0)]]
+                    for axis in perm:
+                        step = list(step)
+                        step[axis] = 1
+                        tet.append(corner[tuple(step)])
+                    if i == 1 and j == ny - 2:
+                        weld_elems.append(len(elements))
+                    elements.append(tet)
+    elements = np.array(elements, dtype=np.int64)
+
+    bottom = np.array(sorted(nid(i, 0, k) for i in range(nx)
+                             for k in range(nz)), dtype=np.int64)
+    top = np.array(sorted(nid(i, ny - 1, k) for i in range(nx)
+                          for k in range(nz)), dtype=np.int64)
+    toe = np.array([nid(2, ny - 1, k) for k in range(nz)], dtype=np.int64)
+
+    return FEMesh(
+        nodes=nodes,
+        elements=elements,
+        element_type=ElementType.TET4,
+        physical_groups={"weld": np.array(weld_elems, dtype=np.int64)},
+        node_sets={
+            "bottom": bottom,
+            "top": top,
+            "weld_toe": toe.copy(),
+            "weld_toe_0": toe,
+        },
+    )

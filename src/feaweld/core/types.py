@@ -250,6 +250,9 @@ class SNStandard(CaseInsensitiveStrEnum):
     IIW = "iiw"
     DNV = "dnv"
     ASME = "asme"
+    EC3 = "ec3"
+    BS7608 = "bs7608"
+    AWS = "aws"
 
 
 @dataclass

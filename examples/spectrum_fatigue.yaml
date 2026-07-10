@@ -1,0 +1,58 @@
+# Butt weld under a variable-amplitude stress history.
+#
+# Walked through in docs/guides/fatigue_assessment.md (worked example). Run
+# it with:
+#
+#     feaweld run examples/spectrum_fatigue.yaml
+#
+# The static solve represents the maximum load of the cycle (the 160 MPa
+# peak of the history); the fatigue: block rainflow-counts the shipped
+# load_history.csv and Miner-sums the damage on the EC3 category-90 curve
+# with a Goodman mean-stress correction and a PWHT-relaxed residual stress.
+
+name: spectrum_fatigue_example
+description: Butt weld under a variable-amplitude history, EC3 category 90
+
+material:
+  base_metal: S355         # any key from `feaweld materials`
+  weld_metal: E70XX
+  haz: S355
+  temperature: 20.0        # service temperature (°C)
+
+geometry:
+  joint_type: butt
+  base_width: 200.0        # mm — plate width
+  base_thickness: 20.0     # mm — plate thickness
+  groove_angle: 60.0       # deg — total included groove angle
+  root_gap: 2.0            # mm — root opening
+  penetration: full        # full | partial
+
+mesh:
+  global_size: 2.0         # mm — background element size
+  weld_toe_size: 0.2       # mm — refinement at the weld toe
+  element_order: 2         # 1 = linear, 2 = quadratic
+
+solver:
+  solver_type: linear_elastic
+  backend: auto            # auto | fenics | calculix
+
+load:
+  axial_force: 640000.0    # N — the cycle-maximum load: 160 MPa nominal
+                           #     over the 200 x 20 mm section
+
+fatigue:
+  history_file: load_history.csv   # resolved relative to this YAML file
+  history_units: stress            # values are absolute MPa, not load factors
+  mean_stress_correction: goodman  # none | goodman | gerber
+  thickness_correction: true       # IIW f(t); inert here (t = 20 <= 25 mm)
+  residual_stress:
+    profile: PWHT_butt             # bundled profile: 0.3 sigma_y at surface
+
+postprocess:
+  stress_methods:
+    - hotspot_linear
+    - nominal
+  sn_curve: EC3_90         # EN 1993-1-9 detail category 90 (transverse butt)
+  fatigue_assessment: true
+
+output_dir: results/spectrum_fatigue

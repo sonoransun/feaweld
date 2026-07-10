@@ -95,6 +95,7 @@ def asme_allowable_check(
     categorization: StressCategorization,
     S_m: float,
     S_y: float,
+    joint_efficiency: float = 1.0,
 ) -> dict[str, dict]:
     """Check stress limits per ASME VIII Division 2 Part 5.
 
@@ -106,41 +107,49 @@ def asme_allowable_check(
         allowable stress intensity (MPa) = min(σ_u/2.4, σ_y/1.5)
     S_y : float
         yield strength (MPa)
+    joint_efficiency : float
+        weld joint efficiency E; the effective allowable E·S_m replaces
+        S_m in all four checks.  With the default 1.0 the checks are the
+        seamless / fully-examined limits and no ``joint_efficiency`` key
+        is added to the result.
 
     Returns
     -------
     dict[str, dict]
-        Dict with category checks: {category: {value, limit, ratio, passes}}
+        Dict with category checks: {category: {value, limit, ratio, passes}};
+        for joint_efficiency != 1.0 an extra ``joint_efficiency`` key holds
+        the applied factor.
     """
     checks = {}
+    E_Sm = joint_efficiency * S_m
 
-    # Primary membrane: P_m ≤ S_m
+    # Primary membrane: P_m ≤ E·S_m
     checks["Pm"] = {
         "value": abs(categorization.membrane),
-        "limit": S_m,
-        "ratio": abs(categorization.membrane) / S_m if S_m > 0 else float("inf"),
-        "passes": abs(categorization.membrane) <= S_m,
+        "limit": E_Sm,
+        "ratio": abs(categorization.membrane) / E_Sm if E_Sm > 0 else float("inf"),
+        "passes": abs(categorization.membrane) <= E_Sm,
     }
 
-    # Primary local membrane: P_L ≤ 1.5 * S_m
+    # Primary local membrane: P_L ≤ 1.5 * E·S_m
     checks["PL"] = {
         "value": abs(categorization.membrane),
-        "limit": 1.5 * S_m,
-        "ratio": abs(categorization.membrane) / (1.5 * S_m) if S_m > 0 else float("inf"),
-        "passes": abs(categorization.membrane) <= 1.5 * S_m,
+        "limit": 1.5 * E_Sm,
+        "ratio": abs(categorization.membrane) / (1.5 * E_Sm) if E_Sm > 0 else float("inf"),
+        "passes": abs(categorization.membrane) <= 1.5 * E_Sm,
     }
 
-    # Primary membrane + bending: P_m + P_b ≤ 1.5 * S_m
+    # Primary membrane + bending: P_m + P_b ≤ 1.5 * E·S_m
     pm_pb = abs(categorization.membrane) + abs(categorization.bending)
     checks["Pm+Pb"] = {
         "value": pm_pb,
-        "limit": 1.5 * S_m,
-        "ratio": pm_pb / (1.5 * S_m) if S_m > 0 else float("inf"),
-        "passes": pm_pb <= 1.5 * S_m,
+        "limit": 1.5 * E_Sm,
+        "ratio": pm_pb / (1.5 * E_Sm) if E_Sm > 0 else float("inf"),
+        "passes": pm_pb <= 1.5 * E_Sm,
     }
 
-    # Primary + secondary: P_L + P_b + Q ≤ S_PS = max(3*S_m, 2*S_y)
-    S_PS = max(3.0 * S_m, 2.0 * S_y)
+    # Primary + secondary: P_L + P_b + Q ≤ S_PS = max(3*E·S_m, 2*S_y)
+    S_PS = max(3.0 * E_Sm, 2.0 * S_y)
     total_pq = abs(categorization.membrane) + abs(categorization.bending) + categorization.peak
     checks["PL+Pb+Q"] = {
         "value": total_pq,
@@ -148,6 +157,9 @@ def asme_allowable_check(
         "ratio": total_pq / S_PS if S_PS > 0 else float("inf"),
         "passes": total_pq <= S_PS,
     }
+
+    if joint_efficiency != 1.0:
+        checks["joint_efficiency"] = joint_efficiency
 
     return checks
 

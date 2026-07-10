@@ -39,6 +39,25 @@ def miner_damage(
     return D
 
 
+def fatigue_life_from_damage(damage: float) -> float:
+    """Fatigue life from a cumulative Miner damage sum.
+
+    Parameters
+    ----------
+    damage : float
+        Miner damage per repeat of the load spectrum.
+
+    Returns
+    -------
+    float
+        Life in repeats of the spectrum, 1 / damage.  Non-positive
+        damage yields infinite life.
+    """
+    if damage <= 0:
+        return float("inf")
+    return 1.0 / damage
+
+
 def fatigue_life(
     load_history: LoadHistory,
     sn_curve: SNCurve,

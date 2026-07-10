@@ -45,6 +45,15 @@ _ELEMENT_TYPE_MAP: dict[ElementType, str] = {
     ElementType.HEX20: "C3D20",
 }
 
+# Gmsh and CalculiX (Abaqus) disagree on mid-edge node order for some
+# quadratic elements.  Gmsh TET10 places mid-edge nodes at positions 4..9 on
+# edges (0,1),(1,2),(2,0),(0,3),(2,3),(1,3); Abaqus/CalculiX C3D10 expects
+# (0,1),(1,2),(2,0),(0,3),(1,3),(2,3) — positions 8 and 9 swap.  Types
+# without an entry are written unchanged.
+_GMSH_TO_CCX_PERMUTATION: dict[ElementType, list[int]] = {
+    ElementType.TET10: [0, 1, 2, 3, 4, 5, 6, 7, 9, 8],
+}
+
 
 def _write_nodes(f: Any, mesh: FEMesh) -> None:
     """Write the *NODE section to an .inp file handle."""
@@ -63,10 +72,13 @@ def _write_elements(f: Any, mesh: FEMesh) -> None:
     ccx_type = _ELEMENT_TYPE_MAP.get(mesh.element_type)
     if ccx_type is None:
         raise ValueError(f"Unsupported element type for CalculiX: {mesh.element_type}")
+    permutation = _GMSH_TO_CCX_PERMUTATION.get(mesh.element_type)
     f.write(f"*ELEMENT, TYPE={ccx_type}, ELSET=ALL\n")
     for i in range(mesh.n_elements):
         # 1-based element and node IDs
         connectivity = mesh.elements[i] + 1
+        if permutation is not None:
+            connectivity = connectivity[permutation]
         parts = [str(i + 1)] + [str(int(n)) for n in connectivity]
         f.write(", ".join(parts) + "\n")
 

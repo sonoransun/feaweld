@@ -122,6 +122,227 @@ def blodgett(geometry: str, d: float, b: float, throat: float,
         click.echo(f"  ASD:  R_n/Omega = {asd:.0f} N")
 
 
+def _list_sn_curves() -> None:
+    """Echo the available S-N curve specs for all six standards."""
+    from feaweld.data.cache import get_cache
+    from feaweld.fatigue.sn_curves import _ASME_CURVES, _DNV_DATA, _IIW_FAT_CLASSES
+
+    cache = get_cache()
+    iiw = ", ".join(str(c) for c in _IIW_FAT_CLASSES)
+    dnv = ", ".join(sorted(_DNV_DATA))
+    asme = ", ".join(sorted(_ASME_CURVES))
+    ec3 = ", ".join(str(c) for c in cache.get("sn_curves/ec3")["categories"])
+    bs = ", ".join(sorted(cache.get("sn_curves/bs7608")["classes"]))
+    aws = ", ".join(
+        c[:-1] + "'" if c.endswith("P") else c
+        for c in sorted(cache.get("sn_curves/aws")["categories"])
+    )
+
+    click.echo("Available S-N curve specs (<standard>_<name>):")
+    click.echo(f"  IIW      (e.g. IIW_FAT90)      FAT classes: {iiw}")
+    click.echo(f"  DNV      (e.g. DNV_D)          categories:  {dnv}")
+    click.echo(f"  ASME     (e.g. ASME_ferritic)  materials:   {asme}")
+    click.echo(f"  EC3      (e.g. EC3_90)         categories:  {ec3}")
+    click.echo(f"  BS 7608  (e.g. BS7608_D)       classes:     {bs}")
+    click.echo(f"  AWS      (e.g. AWS_C)          categories:  {aws}")
+
+
+@main.command()
+@click.option("--curve", "-c", default="IIW_FAT90",
+              help="S-N curve spec, e.g. IIW_FAT90, EC3_90, BS7608_D, AWS_C")
+@click.option("--history", type=click.Path(exists=True), default=None,
+              help="CSV file of a stress history (MPa) to rainflow-count")
+@click.option("--column", type=int, default=0,
+              help="Column of the history CSV to use (0-based)")
+@click.option("--stress-range", type=float, default=None,
+              help="Constant-amplitude stress range (MPa)")
+@click.option("--cycles", "-n", type=float, default=None,
+              help="Applied cycle count")
+@click.option("--r-ratio", type=float, default=None,
+              help="Stress ratio R = s_min/s_max; sets the mean stress of "
+                   "the --stress-range cycle")
+@click.option("--mean-correction",
+              type=click.Choice(["none", "goodman", "gerber"]),
+              default="none", help="Mean-stress correction")
+@click.option("--sigma-u", type=float, default=None,
+              help="Ultimate tensile strength (MPa); required for "
+                   "--mean-correction and --roughness")
+@click.option("--thickness", "-t", type=float, default=None,
+              help="Plate thickness (mm) for the IIW thickness correction")
+@click.option("--roughness", type=float, default=None,
+              help="Surface roughness Ra (um) for the Marin surface factor")
+@click.option("--environment", type=click.Choice(["air", "corrosive", "seawater"]),
+              default="air", help="Environment knockdown factor")
+@click.option("--residual-profile", default=None,
+              help="Bundled residual stress profile; its surface value "
+                   "becomes the residual mean stress")
+@click.option("--sigma-y", type=float, default=None,
+              help="Yield strength (MPa); required with --residual-profile")
+@click.option("--list-curves", is_flag=True,
+              help="List available S-N curve specs and exit")
+def fatigue(curve: str, history: str | None, column: int,
+            stress_range: float | None, cycles: float | None,
+            r_ratio: float | None, mean_correction: str,
+            sigma_u: float | None, thickness: float | None,
+            roughness: float | None, environment: str,
+            residual_profile: str | None, sigma_y: float | None,
+            list_curves: bool) -> None:
+    """Standalone spectrum fatigue assessment (no FEA).
+
+    Assesses either a constant-amplitude cycle (--stress-range, with an
+    optional --r-ratio mean) or a rainflow-counted stress history CSV
+    (--history) against an S-N curve, with optional mean-stress
+    correction and thickness/surface/environment knockdowns.
+    """
+    if list_curves:
+        _list_sn_curves()
+        return
+
+    from feaweld.fatigue.assessment import assess_spectrum, build_cycle_set
+    from feaweld.fatigue.knockdown import (
+        environment_factor, surface_finish_factor, thickness_correction,
+    )
+    from feaweld.fatigue.sn_curves import parse_sn_spec
+
+    if (history is None) == (stress_range is None):
+        raise click.ClickException(
+            "Provide exactly one of --history or --stress-range."
+        )
+    if stress_range is not None and stress_range <= 0:
+        raise click.ClickException("--stress-range must be positive.")
+    if r_ratio is not None and history is not None:
+        raise click.ClickException(
+            "--r-ratio applies only with --stress-range; a history carries "
+            "its own cycle means."
+        )
+    if r_ratio is not None and r_ratio >= 1.0:
+        raise click.ClickException(
+            f"--r-ratio must be < 1 (R = sigma_min / sigma_max); got {r_ratio}."
+        )
+    if mean_correction != "none" and sigma_u is None:
+        raise click.ClickException(
+            f"--sigma-u is required for '{mean_correction}' mean-stress "
+            f"correction."
+        )
+    if roughness is not None and sigma_u is None:
+        raise click.ClickException("--roughness requires --sigma-u.")
+    if residual_profile is not None and sigma_y is None:
+        raise click.ClickException("--residual-profile requires --sigma-y.")
+
+    try:
+        sn = parse_sn_spec(curve)
+    except (ValueError, KeyError) as e:
+        raise click.ClickException(str(e))
+
+    if history is not None:
+        try:
+            data = np.loadtxt(history, delimiter=",", ndmin=2)
+        except ValueError:
+            data = np.loadtxt(history, ndmin=2)
+        if not 0 <= column < data.shape[1]:
+            raise click.ClickException(
+                f"--column {column} out of range for '{history}' "
+                f"({data.shape[1]} column(s))."
+            )
+        signal = data[:, column].astype(np.float64)
+        built = build_cycle_set(history=signal, history_units="stress")
+    else:
+        mean = 0.0
+        if r_ratio is not None:
+            mean = stress_range * (1.0 + r_ratio) / (2.0 * (1.0 - r_ratio))
+        built = build_cycle_set(blocks=[{
+            "stress_range": stress_range,
+            "mean_stress": mean,
+            "cycles": cycles if cycles is not None else 1.0,
+        }])
+    cycle_set, kind, _ = built
+    if not cycle_set:
+        raise click.ClickException(
+            "History produced no rainflow cycles (need at least one reversal)."
+        )
+
+    factors: list[tuple[str, float, str]] = []
+    strength_factor = 1.0
+    if thickness is not None:
+        f_t = thickness_correction(thickness)
+        strength_factor *= f_t
+        factors.append(("thickness f(t)", f_t, f"t = {thickness:g} mm"))
+    if roughness is not None:
+        k_a = surface_finish_factor(roughness, sigma_u)
+        strength_factor *= k_a
+        factors.append(("surface k_a", k_a, f"Ra = {roughness:g} um"))
+    k_env = environment_factor(environment)
+    if k_env != 1.0:
+        strength_factor *= k_env
+        factors.append(("environment k_env", k_env, environment))
+
+    residual_mean = 0.0
+    if residual_profile is not None:
+        from feaweld.data.residual_stress import evaluate_residual_stress
+        try:
+            residual_mean = float(
+                evaluate_residual_stress(residual_profile, 0.0, sigma_y)
+            )
+        except KeyError as e:
+            raise click.ClickException(str(e.args[0]) if e.args else str(e))
+
+    result = assess_spectrum(
+        cycle_set, sn,
+        mean_correction=mean_correction,
+        sigma_u=sigma_u,
+        residual_mean=residual_mean,
+        strength_factor=strength_factor,
+    )
+
+    click.echo(f"\nS-N curve: {sn.name} ({curve})")
+
+    if kind == "history":
+        click.echo(f"\nRainflow counting ({history}, column {column}):")
+        click.echo(f"  cycles counted = {result['n_cycles_per_repeat']:g} "
+                   f"({len(cycle_set)} distinct)")
+    else:
+        rng0, mean0, _count0 = cycle_set[0]
+        click.echo("\nConstant-amplitude loading:")
+        click.echo(f"  stress range = {rng0:.2f} MPa")
+        click.echo(f"  mean stress  = {mean0:.2f} MPa")
+        if cycles is not None:
+            click.echo(f"  cycles       = {cycles:.4g}")
+
+    if factors or residual_profile is not None or mean_correction != "none":
+        click.echo("\nCorrections:")
+        for label, value, detail in factors:
+            click.echo(f"  {label:<18s} = {value:.3f}  ({detail})")
+        if residual_profile is not None:
+            click.echo(f"  residual mean      = {residual_mean:.1f} MPa  "
+                       f"({residual_profile} at surface)")
+            if mean_correction == "none":
+                click.echo("  note: residual mean has no effect with "
+                           "--mean-correction none")
+        if mean_correction != "none":
+            click.echo(f"  mean correction    = {mean_correction} "
+                       f"(sigma_u = {sigma_u:g} MPa)")
+
+    damage = result["damage"]
+    life_cycles = result["life_cycles"]
+    click.echo("\nAssessment:")
+    click.echo(f"  equivalent stress range = "
+               f"{result['equivalent_stress_range']:.2f} MPa")
+    if cycles is not None:
+        if kind == "history":
+            applied = cycles / life_cycles if life_cycles > 0 else float("inf")
+        else:
+            applied = damage
+        click.echo(f"  damage                  = {applied:.4e}")
+    if np.isfinite(life_cycles):
+        click.echo(f"  life                    = {life_cycles:.3e} cycles")
+        if kind == "history":
+            click.echo(f"  spectrum repeats        = "
+                       f"{result['life_repeats']:.3e}")
+    else:
+        click.echo("  life                    = infinite "
+                   "(all cycles below cutoff)")
+
+
 def _parse_vec3(value: str, option: str) -> tuple[float, float, float]:
     try:
         parts = tuple(float(x) for x in value.split(","))
@@ -309,7 +530,10 @@ def animate(case_file: str, output: str, fps: int, blocks: int) -> None:
 
     If the case exposes a sequence of rainflow-counted load blocks via
     ``postprocess_results["load_blocks"]`` those are animated directly.
-    Otherwise a synthetic sequence of *blocks* uniform blocks is
+    Otherwise the pipeline's rainflow stash
+    (``postprocess_results["rainflow"]``, the governing method's
+    MPa-scaled cycles) is animated one cycle family per block.  With
+    neither present, a synthetic sequence of *blocks* uniform blocks is
     generated from the case's stress-range distribution for illustration.
     """
     try:
@@ -329,12 +553,26 @@ def animate(case_file: str, output: str, fps: int, blocks: int) -> None:
 
     sn = parse_sn_spec(case.postprocess.sn_curve)
 
-    # Try to pull a real rainflow block sequence; otherwise synthesize.
+    # Try to pull a real rainflow block sequence; otherwise fall back to
+    # the pipeline's rainflow stash, then to synthetic blocks.
     block_seq = None
     if result.postprocess_results:
         raw = result.postprocess_results.get("load_blocks")
         if isinstance(raw, list) and raw and isinstance(raw[0], list):
             block_seq = raw
+        if block_seq is None:
+            # The workflow stashes the governing method's MPa-scaled
+            # cycles as a flat list of (range, mean, count) triples;
+            # animate one cycle family per block.
+            stash = result.postprocess_results.get("rainflow")
+            if isinstance(stash, list) and stash:
+                try:
+                    block_seq = [
+                        [(float(rng), float(mean), float(count))]
+                        for rng, mean, count in stash
+                    ]
+                except (TypeError, ValueError):
+                    block_seq = None
 
     if block_seq is None:
         click.echo(f"No rainflow blocks on result — generating {blocks} synthetic blocks.")

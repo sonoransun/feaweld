@@ -4,7 +4,7 @@ This tutorial walks through defining a complete fatigue-assessment analysis case
 
 ```mermaid
 flowchart LR
-    yaml["YAML case"] --> mesh["mesh<br/>(Gmsh)"] --> solve["solve<br/>(FEniCSx / CalculiX)"] --> pp["postprocess<br/>(stress methods)"] --> fat["fatigue<br/>(S-N)"] --> rep["HTML report"]
+    yaml["YAML case"] --> mesh["Gmsh mesh<br/>(2D or 3D)"] --> solve["solve<br/>(FEniCSx / CalculiX)"] --> pp["postprocess<br/>(stress methods)"] --> fat["fatigue<br/>(S-N)"] --> rep["HTML report"]
 ```
 
 See the [Architecture page](../architecture.md) for the full pipeline with every
@@ -38,13 +38,13 @@ geometry:
   web_height: 100.0
   web_thickness: 10.0
   weld_leg_size: 8.0
-  length: 1.0              # extrusion depth (1.0 = quasi-2D)
+  length: 1.0              # extrusion depth when dimension: 3 (default 2 = quasi-2D)
 
 mesh:
   global_size: 2.0         # mm — background element size
   weld_toe_size: 0.2       # mm — refinement near the toe
   element_order: 2         # 1 = linear, 2 = quadratic
-  element_type: tri        # tri | quad | tet | hex
+  element_type: tri        # 2D: tri | quad (3D meshes use element_type_3d)
 
 solver:
   solver_type: linear_elastic  # linear_elastic, elastoplastic, thermal_steady, thermal_transient, thermomechanical, creep
@@ -78,6 +78,7 @@ A ready-made copy of a similar case ships with the package as `examples/fillet_t
 | `mesh` | Gmsh sizing + element order | `feaweld.mesh.generator` |
 | `solver` | Physics type + backend selection | `feaweld.solver.backend` |
 | `load` | Mechanical + pressure + thermal delta | `feaweld.core.loads` |
+| `fatigue` | Cyclic loading + corrections (optional) | `feaweld.fatigue.*` |
 | `postprocess` | Which stress methods to run + S-N curve | `feaweld.postprocess.*` |
 | `thermal` | Welding heat input + PWHT (optional) | `feaweld.solver.thermal` |
 | `probabilistic` | Monte Carlo / Sobol scatter (optional) | `feaweld.probabilistic.*` |
@@ -91,6 +92,35 @@ Every field has a default, so specify only what differs. The complete set:
     and the member name too — `fillet_t`, `FILLET_T`, and `SED` (for
     `strain_energy_density`) all validate. These docs use the canonical lowercase
     values, which is what `save_case` writes back.
+
+`geometry` — see [Loads & boundary conditions](../guides/loads_and_bcs.md) for
+how the dimensions enter the nominal stress:
+
+| Field | Default | Meaning |
+|-------|---------|---------|
+| `joint_type` | `fillet_t` | `fillet_t`, `butt`, `lap`, `corner`, `cruciform` |
+| `dimension` | `2` | `2` = cross-section model, `3` = extruded solid (see [3D analysis](../guides/analysis_3d.md)) |
+| `base_width` | `200.0` | mm, base plate width |
+| `base_thickness` | `20.0` | mm, base plate thickness |
+| `web_height` | `100.0` | mm, web height (`lap`: overlap length) |
+| `web_thickness` | `10.0` | mm, web thickness |
+| `weld_leg_size` | `8.0` | mm, fillet weld leg |
+| `groove_angle` | `60.0` | °, total included groove angle (`butt` only) |
+| `root_gap` | `2.0` | mm, root opening (`butt` only) |
+| `penetration` | `full` | `full` or `partial` (`butt` only) |
+| `length` | `1.0` | mm, extrusion depth in 3D; quasi-2D marker in 2D |
+
+`mesh` — see the [3D analysis guide](../guides/analysis_3d.md#mesh-sizing-3d-costs-are-cubic)
+for 3D sizing (the 2D defaults below are far too fine for a solid):
+
+| Field | Default | Meaning |
+|-------|---------|---------|
+| `global_size` | `2.0` | mm, background element size |
+| `weld_toe_size` | `0.2` | mm, target size at the weld toe |
+| `element_order` | `2` | `1` = linear, `2` = quadratic |
+| `element_type` | `tri` | 2D element shape: `tri` or `quad` |
+| `element_type_3d` | `tet` | 3D element shape: `tet` only (`hex` not yet supported) |
+| `refinement_distance` | `null` | mm, toe→global size transition; `null` → 5.0 |
 
 `solver` — see the [Solvers guide](../guides/solvers.md):
 
@@ -116,21 +146,43 @@ Every field has a default, so specify only what differs. The complete set:
 | `pressure` | `0.0` | MPa surface pressure |
 | `temperature_delta` | `0.0` | °C uniform thermoelastic rise |
 
+`fatigue` — cyclic loading + corrections (optional; without it the assessment is
+a single S-N evaluation). See [Fatigue assessment](../guides/fatigue_assessment.md):
+
+| Field | Default | Meaning |
+|-------|---------|---------|
+| `r_ratio` | `null` | Constant-amplitude stress ratio R = σ_min/σ_max (< 1) |
+| `cycles` | `null` | Design cycle count for `r_ratio`; also reports `utilization` |
+| `blocks` | `[]` | Spectrum blocks: `range_factor`/`stress_range`, `mean_factor`/`mean_stress`, `cycles` |
+| `history` | `[]` | Inline load signal, rainflow-counted |
+| `history_file` | `null` | Signal file (CSV), relative to the case YAML |
+| `history_units` | `load_factor` | `load_factor` (fractions of the solved max) or `stress` (MPa) |
+| `mean_stress_correction` | `none` | `none`, `goodman`, `gerber` |
+| `thickness_correction` | `true` | IIW plate-thickness factor f(t) |
+| `thickness_exponent` | `0.3` | Exponent of f(t) |
+| `surface_roughness` | `null` | µm Ra → Marin surface factor |
+| `environment` | `air` | `air`, `corrosive`, `seawater` knockdown |
+| `residual_stress` | inactive | One of `profile`, `value`, `as_welded` — always a fatigue mean shift; `superimpose` also adds the field to saved output |
+
+Only one cyclic style (`r_ratio` / `blocks` / `history` / `history_file`) may be
+given.
+
 `postprocess` — see [Custom post-processing](03_custom_postprocessing.md) and [Convergence](../guides/convergence.md):
 
 | Field | Default | Meaning |
 |-------|---------|---------|
 | `stress_methods` | `[hotspot_linear]` | Any of `nominal`, `hotspot_linear`, `hotspot_quadratic`, `structural_dong`, `notch_stress`, `strain_energy_density`, `linearization`, `blodgett` |
-| `sn_curve` | `IIW_FAT90` | S-N curve name (`IIW_FAT*`, `DNV_*`, `ASME_*`) |
+| `sn_curve` | `IIW_FAT90` | S-N spec: `IIW_FAT*`, `DNV_*`, `ASME_*`, `EC3_*`, `BS7608_*`, `AWS_*` (see [Fatigue assessment](../guides/fatigue_assessment.md#s-n-standards)) |
 | `fatigue_assessment` | `true` | Run the fatigue stage |
 | `singularity_check` | `true` | Coarse re-solve to flag mesh-driven peaks |
 | `singularity_threshold` | `0.20` | Stress-rise fraction that flags a node |
 | `singularity_coarsening` | `2.0` | Coarse-mesh size factor for the check |
 | `notch_radius` | `1.0` | mm, IIW fictitious radius (effective notch) |
-| `notch_nominal_stress` | `null` | MPa; `null` → computed from load/geometry |
+| `notch_nominal_stress` | `null` | MPa; `null` → FEA linearized structural stress at the toe |
 | `sed_control_radius` | `0.28` | mm, SED control radius R₀ |
 | `sed_w_ref` | `null` | MJ/m³ reference; `null` → skip SED life |
 | `linearization_points` | `20` | Points through the linearization path |
+| `weld_efficiency` | `null` | Joint efficiency for the `nominal` ASME checks: `{standard, joint_type, examination}` lookup or a direct `{value}` |
 
 `thermal` — see [Solvers](../guides/solvers.md) and [PWHT](../guides/pwht.md):
 
@@ -238,8 +290,10 @@ report_path = generate_report(result)
 
 ## Common extensions
 
-- **Change the S-N curve** — set `postprocess.sn_curve` to any `IIW_FAT*`, `DNV_*`, or `ASME_*` name. Run `python -c "from feaweld.fatigue.sn_curves import list_curves; print(list_curves())"` for the full list.
-- **Use a different joint** — swap `joint_type` and the matching `geometry` fields (e.g. `butt` uses `base_width` + `base_thickness` only; `lap` adds `web_height` as the overlap).
+- **Change the S-N curve** — set `postprocess.sn_curve` to any `IIW_FAT*`, `DNV_*`, `ASME_*`, `EC3_*`, `BS7608_*`, or `AWS_*` spec. Run `feaweld fatigue --list-curves` for the full list.
+- **Add cyclic loading** — add a top-level `fatigue:` block (R-ratio, spectrum blocks, or a load history) for rainflow + Miner spectrum assessment; see the [Fatigue assessment guide](../guides/fatigue_assessment.md).
+- **Extrude to 3D** — set `geometry.dimension: 3` (with `length` as the weld length) and coarsen the mesh sizes; see the [3D analysis guide](../guides/analysis_3d.md) and `examples/fillet_t_joint_3d.yaml`.
+- **Use a different joint** — swap `joint_type` and the matching `geometry` fields (e.g. `butt` uses `base_width` + `base_thickness` plus the groove fields `groove_angle`, `root_gap`, and `penetration`; `lap` adds `web_height` as the overlap).
 - **Add thermal welding simulation** — set `solver.solver_type: thermomechanical` and supply a `thermal:` section (see `ThermalConfig` in `workflow.py`).
 
 ## Next
